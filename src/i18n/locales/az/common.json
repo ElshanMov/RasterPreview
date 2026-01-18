@@ -1,0 +1,9 @@
+{
+  "login": "Daxil ol",
+  "logout": "Çıxış",
+  "organizations": "Təşkilatlar",
+  "loading": "Yüklənir...",
+  "welcome": "Xoş gəldin, {{name}}",
+  "404-text": "Üzr istəyirik, daxil olduğunuz səhifə mövcud deyil.",
+  "home-page": "Ana sehife"
+}

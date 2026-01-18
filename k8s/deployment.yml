@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pipeline-ui
+  namespace: ${NAMESPACE}
+  labels:
+    app: pipeline-ui
+    version: v1
+  annotations:
+    kubernetes.io/change-cause: "${ROLLING_HISTORY}"
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: pipeline-ui
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: pipeline-ui
+        version: v1
+        type: avoidOverload
+    spec:
+      containers:
+      - name: pipeline-ui
+        image: "${DOCKER_IMAGE_TAG}"
+        ports:
+        - containerPort: 80
+        env:
+          - name: TZ
+            value: Asia/Baku 
+        resources:
+          requests:
+            memory: "200Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m" 
+      imagePullSecrets:
+        - name: harbor-registry-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: pipeline-ui
+  name: pipeline-ui-svc
+  namespace: ${NAMESPACE}
+spec:
+  ports:
+  - port: 80
+    name: http
+    targetPort: 80
+  selector:
+    app: pipeline-ui
+  type: ClusterIP
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: pipeline-ui-ingress
+  namespace: ${NAMESPACE}
+spec:
+  entryPoints:
+    - web
+  routes:
+  - match: Host(`app.mmdev.az`) && PathPrefix(`/`)
+    kind: Rule
+    services:
+    - name: pipeline-ui-svc
+      port: 80

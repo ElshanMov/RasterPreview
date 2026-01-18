@@ -1,0 +1,9 @@
+{
+  "login": "Login",
+  "logout": "Logout",
+  "organizations": "Organizations",
+  "loading": "Loading...",
+  "welcome": "Welcome, {{name}}",
+  "404-text": "Sorry, Page not found",
+  "home-page": "Home Page"
+}
