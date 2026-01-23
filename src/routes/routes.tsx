@@ -6,7 +6,7 @@ import PipelinesPage from "../pages/pipeline/PipelinesPage";
 import PipelineUploader from "../pages/pipeline/parts/PipelineUploader"
 import RastersPage from "../pages/raster/RastersPage";
 import RasterUploader from "../pages/raster/RasterUploader";
-
+import RasterMapPage from "../pages/raster-map/RasterMapPage";
 export const privateRoutes = [
     { path: `/`, element: <DashboardPage />, permission: '*' },
     { path: `/pipelines`, element: <PipelinesPage />, permission: '*' },
@@ -15,6 +15,7 @@ export const privateRoutes = [
     { path: `/pipelines/runs/:pipelineRunId/steps`, element: <PipelineStepsPage />, permission: '*' },
     { path: `/rasters`, element: <RastersPage />, permission: '*' },
     { path: `/rasters/new`, element: <RasterUploader />, permission: '*' },
+    { path: `/raster-map`, element: <RasterMapPage />, permission: '*' },
     { path: `/*`, element: <NotFound />, permission: '*' },
 ];
 
