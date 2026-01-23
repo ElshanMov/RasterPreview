@@ -7,7 +7,8 @@ import {
     FullscreenOutlined,
     FullscreenExitOutlined,
     CloudOutlined,
-    CalendarOutlined
+    CalendarOutlined,
+    LoadingOutlined
 } from '@ant-design/icons';
 import type { BboxCoords, StacItem } from '../../types/raster.map.type';
 import dayjs from 'dayjs';
@@ -26,6 +27,7 @@ interface RasterMapViewProps {
     onItemSelect: (item: StacItem) => void;
     collapsed: boolean;
     onToggleSidebar: () => void;
+    loading?: boolean;
 }
 
 // ==========================================
@@ -134,6 +136,74 @@ const BboxDrawer: React.FC<{
 // ==========================================
 // Item Footprint Component
 // ==========================================
+
+// Property label mapping - gözəl adlar üçün
+const PROPERTY_LABELS: Record<string, string> = {
+    title: 'Başlıq',
+    description: 'Təsvir',
+    datetime: 'Tarix',
+    created: 'Yaradılıb',
+    updated: 'Yenilənib',
+    start_datetime: 'Başlanğıc',
+    end_datetime: 'Son',
+    platform: 'Platform',
+    pipeline_type: 'Pipeline növü',
+    feature_count: 'Feature sayı',
+    source_table: 'Mənbə cədvəl',
+    organization_id: 'Təşkilat ID',
+    'processing:level': 'Emal səviyyəsi',
+    geometry_strategy: 'Geometry strategiya',
+    'eo:cloud_cover': 'Bulud örtüyü',
+    'proj:epsg': 'EPSG',
+    gsd: 'Rezolyusiya (GSD)',
+};
+
+// Format value based on key
+const formatPropertyValue = (key: string, value: any): string => {
+    if (value === null || value === undefined) return '-';
+    
+    // Date fields
+    if (key.includes('datetime') || key === 'created' || key === 'updated') {
+        return dayjs(value).format('DD.MM.YYYY HH:mm');
+    }
+    
+    // Numbers with formatting
+    if (key === 'feature_count' && typeof value === 'number') {
+        return value.toLocaleString();
+    }
+    
+    // Cloud cover percentage
+    if (key === 'eo:cloud_cover') {
+        return `${value}%`;
+    }
+    
+    // GSD with unit
+    if (key === 'gsd') {
+        return `${value}m`;
+    }
+    
+    // Truncate long IDs
+    if (key.includes('_id') && typeof value === 'string' && value.length > 20) {
+        return `${value.substring(0, 8)}...${value.substring(value.length - 4)}`;
+    }
+    
+    return String(value);
+};
+
+// Get tag color for specific properties
+const getTagColor = (key: string, value: any): string | undefined => {
+    if (key === 'pipeline_type') return 'blue';
+    if (key === 'processing:level') return 'purple';
+    if (key === 'geometry_strategy') return 'cyan';
+    if (key === 'platform') return 'geekblue';
+    if (key === 'eo:cloud_cover') {
+        if (value < 20) return 'green';
+        if (value < 50) return 'orange';
+        return 'red';
+    }
+    return undefined;
+};
+
 const ItemFootprint: React.FC<{
     item: StacItem;
     isSelected: boolean;
@@ -143,6 +213,17 @@ const ItemFootprint: React.FC<{
 
     const positions = item.geometry.coordinates[0].map(
         (coord: [number, number]) => [coord[1], coord[0]] as [number, number]
+    );
+
+    const props = item.properties;
+    
+    // Title və description ayrıca göstəriləcək
+    const title = props.title || item.id;
+    const description = props.description;
+    
+    // Qalan properties - title və description xaric
+    const otherProps = Object.entries(props).filter(
+        ([key]) => key !== 'title' && key !== 'description'
     );
 
     return (
@@ -158,30 +239,121 @@ const ItemFootprint: React.FC<{
                 click: onSelect
             }}
         >
-            <Popup>
-                <Card size="small" bordered={false} style={{ minWidth: 200 }}>
-                    <Text strong style={{ display: 'block', marginBottom: 8 }}>
-                        {item.properties.title || item.id}
-                    </Text>
-                    
-                    <div style={{ fontSize: 12, marginBottom: 4 }}>
-                        <CalendarOutlined style={{ marginRight: 4 }} />
-                        {dayjs(item.properties.datetime).format('DD.MM.YYYY HH:mm')}
+            <Popup maxWidth={400} minWidth={300}>
+                <div style={{ padding: 4, maxHeight: 400, overflowY: 'auto' }}>
+                    {/* Title */}
+                    <div style={{ 
+                        fontWeight: 600, 
+                        fontSize: 14, 
+                        marginBottom: 8,
+                        color: '#1677ff'
+                    }}>
+                        {title}
                     </div>
                     
+                    {/* Description */}
+                    {description && (
+                        <div style={{ 
+                            fontSize: 12, 
+                            color: '#666', 
+                            marginBottom: 12,
+                            padding: 8,
+                            background: '#f5f5f5',
+                            borderRadius: 4,
+                            fontStyle: 'italic'
+                        }}>
+                            {description}
+                        </div>
+                    )}
+
+                    {/* Collection */}
                     {item.collection && (
-                        <Tag style={{ marginTop: 4 }}>{item.collection}</Tag>
+                        <div style={{ marginBottom: 12 }}>
+                            <Tag color="green">{item.collection}</Tag>
+                        </div>
                     )}
-                    
-                    {item.properties['eo:cloud_cover'] !== undefined && (
-                        <Tag 
-                            color={item.properties['eo:cloud_cover'] < 20 ? 'green' : 'orange'}
-                            style={{ marginTop: 4 }}
-                        >
-                            <CloudOutlined /> {item.properties['eo:cloud_cover']}%
-                        </Tag>
+
+                    {/* All Properties */}
+                    <div style={{ 
+                        fontSize: 12,
+                        borderTop: '1px solid #f0f0f0',
+                        paddingTop: 8
+                    }}>
+                        {otherProps.map(([key, value]) => {
+                            const label = PROPERTY_LABELS[key] || key;
+                            const formattedValue = formatPropertyValue(key, value);
+                            const tagColor = getTagColor(key, value);
+                            
+                            return (
+                                <div 
+                                    key={key} 
+                                    style={{ 
+                                        display: 'flex', 
+                                        marginBottom: 6,
+                                        alignItems: 'flex-start'
+                                    }}
+                                >
+                                    <span style={{ 
+                                        color: '#999', 
+                                        minWidth: 120,
+                                        flexShrink: 0,
+                                        fontSize: 11
+                                    }}>
+                                        {label}:
+                                    </span>
+                                    <span style={{ 
+                                        fontWeight: 500,
+                                        wordBreak: 'break-word',
+                                        fontSize: 11
+                                    }}>
+                                        {tagColor ? (
+                                            <Tag color={tagColor} style={{ margin: 0, fontSize: 11 }}>
+                                                {formattedValue}
+                                            </Tag>
+                                        ) : (
+                                            formattedValue
+                                        )}
+                                    </span>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    {/* Assets section */}
+                    {item.assets && Object.keys(item.assets).length > 0 && (
+                        <div style={{ 
+                            marginTop: 12, 
+                            paddingTop: 8, 
+                            borderTop: '1px solid #f0f0f0' 
+                        }}>
+                            <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 6 }}>
+                                Assets:
+                            </div>
+                            {Object.entries(item.assets).map(([key, asset]) => (
+                                <div key={key} style={{ marginBottom: 4 }}>
+                                    <Tag color="geekblue" style={{ fontSize: 10 }}>
+                                        {key}
+                                    </Tag>
+                                    <span style={{ fontSize: 10, color: '#999', marginLeft: 4 }}>
+                                        {asset.title}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
                     )}
-                </Card>
+
+                    {/* Item ID */}
+                    <div style={{ 
+                        marginTop: 12, 
+                        paddingTop: 8, 
+                        borderTop: '1px solid #f0f0f0',
+                        fontSize: 10,
+                        color: '#999',
+                        fontFamily: 'monospace'
+                    }}>
+                        ID: {item.id}
+                    </div>
+                </div>
             </Popup>
         </Polygon>
     );
@@ -199,7 +371,8 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
     selectedItem,
     onItemSelect,
     collapsed,
-    onToggleSidebar
+    onToggleSidebar,
+    loading = false
 }) => {
     const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -280,8 +453,29 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
                 </Space>
             </div>
 
+            {/* Loading Indicator */}
+            {loading && (
+                <div style={{
+                    position: 'absolute',
+                    top: 10,
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    zIndex: 1000,
+                    background: 'rgba(255,255,255,0.95)',
+                    padding: '8px 16px',
+                    borderRadius: 8,
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8
+                }}>
+                    <LoadingOutlined spin style={{ color: '#1677ff' }} />
+                    <Text>Yüklənir...</Text>
+                </div>
+            )}
+
             {/* Results Count */}
-            {results.length > 0 && (
+            {results.length > 0 && !loading && (
                 <div style={{
                     position: 'absolute',
                     top: 10,
@@ -346,6 +540,12 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
             >
                 {/* Map Drag Controller */}
                 <MapDragController isDrawing={isDrawingBbox} />
+
+                {/* Map Move Handler - yeni!
+                <MapMoveHandler 
+                    onMapMove={onMapMove} 
+                    isDrawing={isDrawingBbox}
+                /> */}
 
                 <LayersControl position="topright">
                     <BaseLayer checked name="🛰️ Satellite">

@@ -6,5 +6,16 @@ export default defineConfig({
   plugins: [react()],
   worker: {
     format: 'es'
+  },
+  server: {
+    proxy: {
+      // STAC API proxy - CORS problemini həll edir
+      '/stac-api': {
+        target: 'http://stac.mmdev.az',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/stac-api/, ''),
+      }
+    }
   }
 })

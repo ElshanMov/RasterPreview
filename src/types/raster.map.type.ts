@@ -10,7 +10,7 @@ export interface BboxCoords {
 }
 
 // ==========================================
-// GET Request - Query String Parameters
+// GET Request - Query String Parameters (legacy, not used)
 // ==========================================
 
 export interface StacSearchGetParams {

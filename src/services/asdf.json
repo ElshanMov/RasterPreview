@@ -1,0 +1,43 @@
+{
+    "bbox": [
+        -176.64033270151546,
+        19.061153366291304,
+        -66.9885639998569,
+        71.300337000041
+    ],
+    "links": [],
+    "assets": {
+        "data": {
+            "href": "https://pygeoapi.milimekan.az/collections/019b26ab-4dfd-7e8f-ba9d-73269ab51c1d_wtr/items",
+            "type": "application/geo+json",
+            "roles": [
+                "data"
+            ],
+            "title": "OGC API Features Endpoint"
+        },
+        "source": {
+            "href": "postgresql://10.12.46.10:5432/gold_mart_db",
+            "type": "application/x-postgresql",
+            "roles": [
+                "source"
+            ],
+            "title": "Source Table: public.gold_azersu_nerimanov_wtr_point_20260107_v3"
+        }
+    },
+    "properties": {
+        "title": "azersu_nerimanov_wtr_point_20260107_v3",
+        "created": "2026-01-07T08:01:53.734702+00:00",
+        "updated": "2026-01-07T08:01:53.734702+00:00",
+        "datetime": "2026-01-07T08:01:53.734702+00:00",
+        "platform": "geo-etl-platform",
+        "description": "Aggregated geometry for wtr (101,146 features)",
+        "end_datetime": "2026-01-07T08:01:53.734702+00:00",
+        "source_table": "public.gold_azersu_nerimanov_wtr_point_20260107_v3",
+        "feature_count": 101146,
+        "pipeline_type": "wtr",
+        "start_datetime": "2026-01-07T08:01:53.734702+00:00",
+        "organization_id": "019b26ab-4dfd-7e8f-ba9d-73269ab51c1d",
+        "processing:level": "L3",
+        "geometry_strategy": "concave_loose"
+    }
+}
