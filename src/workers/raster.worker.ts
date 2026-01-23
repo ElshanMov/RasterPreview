@@ -154,7 +154,7 @@ async function processFile(file: File) {
 
 
     } catch (error: any) {
-        console.error('🔴 processFile XƏTA:', error);
+        console.error('processFile XƏTA:', error);
         console.error('   Stack:', error.stack);
         self.postMessage({
             type: 'error',

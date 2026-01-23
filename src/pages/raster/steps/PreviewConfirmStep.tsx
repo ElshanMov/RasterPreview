@@ -1,7 +1,7 @@
 import React from 'react';
 import { Row, Col, Card, Space, Slider, Select, Button, Alert, Progress } from 'antd';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import RasterPreview from '../RasterPreview';
+import RasterPreview from '../UploadRasterPreview';
 
 interface PreviewConfirmStepProps {
     preview: {

@@ -20,8 +20,7 @@ const SummaryStep: React.FC<SummaryStepProps> = ({
 }) => {
     const values = form.getFieldsValue();
 
-    // ✅ Debug - görək nə var
-    console.log('📊 Summary Step Values:', values);
+    
 
     const InfoRow = ({ label, value }: { label: string; value: any }) => (
         <Row style={{ marginBottom: 16 }}>

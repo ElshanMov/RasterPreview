@@ -12,7 +12,7 @@ import OrganizationStep from "./steps/OrganizationStep";
 import FileStep from "./steps/FileStep";
 import StepsIndicator from "../../components/shared/StepsIndicator";
 import SummaryStep from "./steps/SummaryStep";
-import { v4 as uuidv4 } from 'uuid';
+import { generateUuidFromFileName } from '../../utils/hash.util';
 
 const STEPS = ["Təşkilat", "Fayl", "Təsdiq"];
 
@@ -116,7 +116,7 @@ export default function RasterUploader() {
             setUploadStatus('Metadata qeyd edilir...');
             message.loading({ content: 'Metadata qeyd edilir...', key: 'upload' });
 
-            const stacItemId = uuidv4();
+            const stacItemId = await generateUuidFromFileName(currentFile.name);
             const now = new Date().toISOString();
 
             // ✅ 1. UTM bounds-dan WGS84-ə transform

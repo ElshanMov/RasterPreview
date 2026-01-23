@@ -3,11 +3,11 @@ import { Button, Space, Card, Typography, Row, Col, Spin, Alert, Form } from 'an
 import { Upload } from 'antd';
 import { FileImageOutlined, DeleteOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
-import RasterPreview from '../RasterPreview';
+import RasterPreview from '../UploadRasterPreview';
 import { useRasterPreview } from '../../../hooks/useRasterPreview';
 
 const { Dragger } = Upload;
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 interface FileStepProps {
     form: FormInstance;
@@ -95,14 +95,7 @@ const FileStep: React.FC<FileStepProps> = ({
     return (
         <Card>
             <Space direction="vertical" size="large" style={{ width: '100%' }}>
-                <div style={{ textAlign: 'center' }}>
-                    <FileImageOutlined style={{ fontSize: 48, color: '#1677ff', marginBottom: 16 }} />
-                    <Title level={3}>Raster Fayl Yükləyin</Title>
-                    <Text type="secondary">
-                        {organizationName} təşkilatı üçün raster fayl seçin
-                    </Text>
-                </div>
-
+                
                 {error && (
                     <Alert
                         message="Xəta"
@@ -137,6 +130,9 @@ const FileStep: React.FC<FileStepProps> = ({
                         <p className="ant-upload-drag-icon">
                             <FileImageOutlined style={{ fontSize: 54, color: "#1677ff" }} />
                         </p>
+                         <Text type="secondary">
+                        {organizationName} təşkilatı üçün raster fayl seçin
+                    </Text>
                         <p className="ant-upload-text" style={{ fontSize: 18, fontWeight: 600 }}>
                             Raster faylını seçin və ya buraya sürükləyin
                         </p>
