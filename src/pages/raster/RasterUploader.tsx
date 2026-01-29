@@ -53,16 +53,45 @@ export default function RasterUploader() {
         if (isValid) nextStep();
     };
 
-    const calculatePixelSize = (width: number, height: number, bounds: number[]): string => {
-        const [minX, minY, maxX, maxY] = bounds;
+    const calculatePixelSize = (
+    width: number, 
+    height: number, 
+    bounds: number[], 
+    srid: string
+): string => {
+    const [minX, minY, maxX, maxY] = bounds;
 
-        const xSize = (maxX - minX) / width;
-        const ySize = (maxY - minY) / height;
+    let xSizeMeters: number;
+    let ySizeMeters: number;
 
-        const avgPixelSize = (xSize + ySize) / 2;
+    if (srid.startsWith('326')) {
+        // UTM - artıq metr vahidindədir
+        xSizeMeters = (maxX - minX) / width;
+        ySizeMeters = (maxY - minY) / height;
+    } else if (srid === '4326') {
+        // WGS84 - dərəcədən metrə çevir
+        // 1 dərəcə ≈ 111320 metr (ekvatorda, lat üçün sabitdir)
+        // Longitude üçün: 111320 * cos(latitude)
+        const avgLat = (minY + maxY) / 2;
+        const latRadians = avgLat * (Math.PI / 180);
+        
+        const metersPerDegreeLat = 111320; // sabit
+        const metersPerDegreeLng = 111320 * Math.cos(latRadians); // lat-dan asılı
+        
+        const xSizeDegrees = (maxX - minX) / width;
+        const ySizeDegrees = (maxY - minY) / height;
+        
+        xSizeMeters = xSizeDegrees * metersPerDegreeLng;
+        ySizeMeters = ySizeDegrees * metersPerDegreeLat;
+    } else {
+        // Digər CRS-lər üçün default
+        xSizeMeters = (maxX - minX) / width;
+        ySizeMeters = (maxY - minY) / height;
+    }
 
-        return avgPixelSize.toFixed(6);
-    };
+    // "30.00x30.00" formatında qaytar (metr)
+    return `${xSizeMeters.toFixed(2)}x${ySizeMeters.toFixed(2)}`;
+};
 
     const handleSubmit = async (values: any) => {
 
@@ -79,7 +108,8 @@ export default function RasterUploader() {
             const pixelSize = calculatePixelSize(
                 values.width,
                 values.height,
-                values.bounds
+                values.bounds,
+                values.srid
             );
 
 
@@ -88,17 +118,15 @@ export default function RasterUploader() {
             message.loading({ content: 'Pre-signed URL alınır...', key: 'upload' });
 
             const requestBody = {
-                organizationName: "Azeriqaz",
+                organizationName: organizationName!,
                 fileName: currentFile.name,
-                pixelSize: pixelSize
+                pixelSize: pixelSize,
             };
-
 
             const presignedResponse = await FileService.getRasterFilePresignedUrl(requestBody);
 
 
-            const presignedUrl = presignedResponse.data;
-
+            const presignedUrl = presignedResponse.data.url;
 
             // Upload to MinIO with progress
             setUploadStatus('MinIO-ya yüklənir...');
@@ -178,12 +206,7 @@ export default function RasterUploader() {
                         roles: ["data"]
                     }
                 },
-                links: [
-                    {
-                        rel: "self",
-                        href: `/api/v1/files/raster/${stacItemId}`
-                    }
-                ]
+                links: []
             };
 
 

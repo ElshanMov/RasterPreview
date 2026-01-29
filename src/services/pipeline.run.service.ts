@@ -13,4 +13,7 @@ export const PipelineRunService = {
       },
     });
   },
+  getPipelineRun: async (pipelineRunId: string | undefined): Promise<any> => {
+    return await api.get(`${API_URL}/pipeline/api/v1/pipelines/runs/${pipelineRunId}`);
+  },
 }

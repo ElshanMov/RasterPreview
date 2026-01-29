@@ -9,6 +9,7 @@ import {
     SyncOutlined
 } from "@ant-design/icons";
 import dayjs from "dayjs";
+import { PipelineStatus } from "../../types/enum.type";
 
 export interface PipelineTableColumnsProps {
     handleRun: (id: string) => void;
@@ -118,7 +119,9 @@ const PipelineTableColumns = ({
                         <Button
                             type="primary"
                             icon={<PlayCircleOutlined />}
-                            disabled={pipeline.status === 0 || pipeline.status === 2}
+                            disabled={pipeline.status === PipelineStatus.Initializing
+                                || pipeline.status === PipelineStatus.Activated
+                                || pipeline.status === PipelineStatus.Completed}
                         >
                             Start
                         </Button>
@@ -133,7 +136,7 @@ const PipelineTableColumns = ({
                         <Button
                             danger
                             icon={<StopOutlined />}
-                            disabled={pipeline.status !== 2}
+                            disabled={pipeline.status === PipelineStatus.Completed || pipeline.status !== PipelineStatus.Activated}
                         >
                             Stop
                         </Button>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { 
     Input, 
     Button, 
@@ -15,7 +15,8 @@ import {
     Tooltip,
     Collapse,
     InputNumber,
-    Badge
+    Badge,
+    Segmented
 } from 'antd';
 import { 
     SearchOutlined, 
@@ -29,20 +30,23 @@ import {
     FilterOutlined,
     SortAscendingOutlined,
     ExpandAltOutlined,
-    FileImageOutlined
+    FileImageOutlined,
+    AppstoreOutlined,
+    PictureOutlined,
+    NodeIndexOutlined
 } from '@ant-design/icons';
 import type { 
     RasterFilterParams, 
     BboxCoords, 
     StacItem, 
     StacCollection,
-    SortBy 
+    SortBy,
+    DataType
 } from '../../types/raster.map.type';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
-const { Panel } = Collapse;
 
 interface RasterMapSidebarProps {
     filters: RasterFilterParams;
@@ -69,6 +73,13 @@ const SORT_OPTIONS = [
     { value: 'gsd:desc', label: 'Rezolyusiya (Aşağı → Yüksək)' },
 ];
 
+// ✅ Data Type seçimləri
+const DATA_TYPE_OPTIONS = [
+    { value: 'all', label: 'Hamısı', icon: <AppstoreOutlined /> },
+    { value: 'raster', label: 'Raster', icon: <PictureOutlined /> },
+    { value: 'vector', label: 'Vector', icon: <NodeIndexOutlined /> }
+];
+
 const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
     filters,
     collections,
@@ -84,8 +95,6 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
     onItemSelect,
     selectedItem
 }) => {
-    const [showAdvanced] = useState(false);
-
     const formatBbox = (bbox: BboxCoords | null): string => {
         if (!bbox) return 'Seçilməyib';
         return `${bbox.minLng.toFixed(4)}, ${bbox.minLat.toFixed(4)} → ${bbox.maxLng.toFixed(4)}, ${bbox.maxLat.toFixed(4)}`;
@@ -103,14 +112,27 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
         return `${sortBy.field}:${sortBy.direction}`;
     };
 
+    // ✅ Data type filter-i də sayılır
     const activeFilterCount = [
         filters.bbox,
         filters.dateRange,
         filters.collections.length > 0,
         filters.ids,
+        filters.dataType !== 'all',
         filters.cloudCover !== null,
         filters.resolution !== null
     ].filter(Boolean).length;
+
+    // ✅ Data type badge
+    const getDataTypeBadge = (item: StacItem) => {
+        const dataType = item.properties.data_type;
+        if (dataType === 'raster') {
+            return <Tag color="blue" style={{ fontSize: 10 }}><PictureOutlined /> Raster</Tag>;
+        } else if (dataType === 'vector') {
+            return <Tag color="green" style={{ fontSize: 10 }}><NodeIndexOutlined /> Vector</Tag>;
+        }
+        return null;
+    };
 
     return (
         <div style={{ padding: 16, height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -120,13 +142,50 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                     <FilterOutlined /> STAC Axtarış
                 </Title>
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                    Raster kataloqunda axtarış edin
+                    Raster və Vector kataloqunda axtarış edin
                 </Text>
             </div>
 
             {/* Filters */}
             <div style={{ flex: 1, overflow: 'auto', marginBottom: 16 }}>
                 
+                {/* ✅ Data Type Filter */}
+                <div style={{ marginBottom: 16 }}>
+                    <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
+                        <AppstoreOutlined /> Data Növü
+                    </Text>
+                    <Segmented
+                        block
+                        value={filters.dataType}
+                        onChange={(value) => onFilterChange({ dataType: value as DataType })}
+                        options={DATA_TYPE_OPTIONS.map(opt => ({
+                            value: opt.value,
+                            label: (
+                                <Space size={4}>
+                                    {opt.icon}
+                                    <span>{opt.label}</span>
+                                </Space>
+                            )
+                        }))}
+                        style={{ width: '100%' }}
+                    />
+                    {filters.dataType !== 'all' && (
+                        <div style={{ marginTop: 8 }}>
+                            <Tag 
+                                color={filters.dataType === 'raster' ? 'blue' : 'green'}
+                                closable
+                                onClose={() => onFilterChange({ dataType: 'all' })}
+                            >
+                                {filters.dataType === 'raster' ? (
+                                    <><PictureOutlined /> Yalnız Raster</>
+                                ) : (
+                                    <><NodeIndexOutlined /> Yalnız Vector</>
+                                )}
+                            </Tag>
+                        </div>
+                    )}
+                </div>
+
                 {/* IDs Search */}
                 <div style={{ marginBottom: 16 }}>
                     <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
@@ -231,91 +290,103 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                 </div>
 
                 {/* Advanced Filters */}
-                <Collapse ghost>
-                    <Panel 
-                        header={
-                            <Text strong style={{ fontSize: 12 }}>
-                                <ExpandAltOutlined /> Əlavə filterlər
-                            </Text>
-                        } 
-                        key="advanced"
-                    >
-                        {/* Cloud Cover */}
-                        <div style={{ marginBottom: 16 }}>
-                            <Text style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
-                                <CloudOutlined /> Bulud örtüyü (maks %)
-                            </Text>
-                            <Slider
-                                min={0}
-                                max={100}
-                                value={filters.cloudCover ?? 100}
-                                onChange={(value) => onFilterChange({ cloudCover: value })}
-                                marks={{ 0: '0%', 50: '50%', 100: '100%' }}
-                            />
-                        </div>
+                <Collapse 
+                    ghost
+                    items={[
+                        {
+                            key: 'advanced',
+                            label: (
+                                <Text strong style={{ fontSize: 12 }}>
+                                    <ExpandAltOutlined /> Əlavə filterlər
+                                </Text>
+                            ),
+                            children: (
+                                <>
+                                    {/* Cloud Cover */}
+                                    <div style={{ marginBottom: 16 }}>
+                                        <Text style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
+                                            <CloudOutlined /> Bulud örtüyü (maks %)
+                                            {filters.dataType === 'vector' && (
+                                                <Tag color="orange" style={{ marginLeft: 8, fontSize: 10 }}>
+                                                    Vector üçün keçərli deyil
+                                                </Tag>
+                                            )}
+                                        </Text>
+                                        <Slider
+                                            min={0}
+                                            max={100}
+                                            value={filters.cloudCover ?? 100}
+                                            onChange={(value) => onFilterChange({ cloudCover: value })}
+                                            marks={{ 0: '0%', 50: '50%', 100: '100%' }}
+                                            disabled={filters.dataType === 'vector'}
+                                        />
+                                    </div>
 
-                        {/* Resolution */}
-                        <div style={{ marginBottom: 16 }}>
-                            <Text style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
-                                Rezolyusiya (GSD, metr)
-                            </Text>
-                            <Space>
-                                <InputNumber
-                                    size="small"
-                                    placeholder="Min"
-                                    min={0}
-                                    value={filters.resolution?.[0]}
-                                    onChange={(val) => onFilterChange({ 
-                                        resolution: [val || 0, filters.resolution?.[1] || 100] 
-                                    })}
-                                    style={{ width: 80 }}
-                                />
-                                <span>-</span>
-                                <InputNumber
-                                    size="small"
-                                    placeholder="Max"
-                                    min={0}
-                                    value={filters.resolution?.[1]}
-                                    onChange={(val) => onFilterChange({ 
-                                        resolution: [filters.resolution?.[0] || 0, val || 100] 
-                                    })}
-                                    style={{ width: 80 }}
-                                />
-                            </Space>
-                        </div>
+                                    {/* Resolution */}
+                                    <div style={{ marginBottom: 16 }}>
+                                        <Text style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
+                                            Rezolyusiya (GSD, metr)
+                                        </Text>
+                                        <Space>
+                                            <InputNumber
+                                                size="small"
+                                                placeholder="Min"
+                                                min={0}
+                                                value={filters.resolution?.[0]}
+                                                onChange={(val) => onFilterChange({ 
+                                                    resolution: [val || 0, filters.resolution?.[1] || 100] 
+                                                })}
+                                                style={{ width: 80 }}
+                                            />
+                                            <span>-</span>
+                                            <InputNumber
+                                                size="small"
+                                                placeholder="Max"
+                                                min={0}
+                                                value={filters.resolution?.[1]}
+                                                onChange={(val) => onFilterChange({ 
+                                                    resolution: [filters.resolution?.[0] || 0, val || 100] 
+                                                })}
+                                                style={{ width: 80 }}
+                                            />
+                                        </Space>
+                                    </div>
 
-                        {/* Limit */}
-                        <div style={{ marginBottom: 16 }}>
-                            <Text style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
-                                Nəticə limiti
-                            </Text>
-                            <Select
-                                style={{ width: '100%' }}
-                                value={filters.limit}
-                                onChange={(value) => onFilterChange({ limit: value })}
-                                options={[
-                                    { value: 10, label: '10 nəticə' },
-                                    { value: 25, label: '25 nəticə' },
-                                    { value: 50, label: '50 nəticə' },
-                                    { value: 100, label: '100 nəticə' },
-                                ]}
-                            />
-                        </div>
+                                    {/* Limit */}
+                                    <div style={{ marginBottom: 16 }}>
+                                        <Text style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
+                                            Nəticə limiti
+                                        </Text>
+                                        <Select
+                                            style={{ width: '100%' }}
+                                            value={filters.limit}
+                                            onChange={(value) => onFilterChange({ limit: value })}
+                                            options={[
+                                                { value: 10, label: '10 nəticə' },
+                                                { value: 25, label: '25 nəticə' },
+                                                { value: 50, label: '50 nəticə' },
+                                                { value: 100, label: '100 nəticə' },
+                                            ]}
+                                        />
+                                    </div>
 
-                        {/* Sort */}
-                        <div>
-                            <Text style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
-                                <SortAscendingOutlined /> Sıralama
-                            </Text>
-                            <Select
-                                style={{ width: '100%' }}
-                                value={getSortValue(filters.sortBy)}
-                                onChange={handleSortChange}
-                                options={SORT_OPTIONS}
-                            />
-                        </div>
-                    </Panel>
-                </Collapse>
+                                    {/* Sort */}
+                                    <div>
+                                        <Text style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
+                                            <SortAscendingOutlined /> Sıralama
+                                        </Text>
+                                        <Select
+                                            style={{ width: '100%' }}
+                                            value={getSortValue(filters.sortBy)}
+                                            onChange={handleSortChange}
+                                            options={SORT_OPTIONS}
+                                        />
+                                    </div>
+                                </>
+                            )
+                        }
+                    ]}
+                />
 
                 <Divider style={{ margin: '16px 0' }} />
 
@@ -361,7 +432,7 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
 
                     {loading ? (
                         <div style={{ textAlign: 'center', padding: 40 }}>
-                            <Spin tip="Axtarılır..." />
+                            <Spin />
                         </div>
                     ) : results.length === 0 ? (
                         <Empty 
@@ -405,6 +476,9 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                                             
                                             <div style={{ marginTop: 6 }}>
                                                 <Space size={4} wrap>
+                                                    {/* ✅ Data Type badge */}
+                                                    {getDataTypeBadge(item)}
+                                                    
                                                     {item.collection && (
                                                         <Tag style={{ fontSize: 10 }}>
                                                             {item.collection}
@@ -427,6 +501,14 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                                                         <Tooltip title="Rezolyusiya">
                                                             <Tag style={{ fontSize: 10 }}>
                                                                 {item.properties['gsd']}m
+                                                            </Tag>
+                                                        </Tooltip>
+                                                    )}
+                                                    {/* ✅ Feature count (Vector üçün) */}
+                                                    {item.properties.feature_count && (
+                                                        <Tooltip title="Feature sayı">
+                                                            <Tag color="purple" style={{ fontSize: 10 }}>
+                                                                {item.properties.feature_count.toLocaleString()} feature
                                                             </Tag>
                                                         </Tooltip>
                                                     )}

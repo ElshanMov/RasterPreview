@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Layout, Typography, App, Switch, Space } from 'antd';
+import { useState, useEffect, useCallback } from 'react';
+import { Layout, Typography, App } from 'antd';
 import RasterMapSidebar from './RasterMapSidebar';
 import RasterMapView from './RasterMapView';
 import { StacService } from '../../services/stac.service';
@@ -11,17 +11,19 @@ import type {
 } from '../../types/raster.map.type';
 
 const { Header } = Layout;
-const { Title, Text } = Typography;
+const { Title } = Typography;
 
+// ✅ dataType: 'all' əlavə edildi
 const defaultFilters: RasterFilterParams = {
     bbox: null,
     dateRange: null,
     collections: [],
     ids: '',
     searchText: '',
+    dataType: 'all',  // ✅ YENİ
     cloudCover: null,
     resolution: null,
-    limit: 50,  // Xəritə üçün daha çox nəticə
+    limit: 10,
     sortBy: { field: 'datetime', direction: 'desc' },
     token: null
 };
@@ -32,9 +34,6 @@ export default function RasterMapPage() {
     const [collapsed, setCollapsed] = useState(false);
     const [filters, setFilters] = useState<RasterFilterParams>(defaultFilters);
     const [isDrawingBbox, setIsDrawingBbox] = useState(false);
-    
-    // Auto-search toggle
-    const [autoSearchEnabled, setAutoSearchEnabled] = useState(false);
     
     // Data states
     const [collections, setCollections] = useState<StacCollection[]>([]);
@@ -47,10 +46,6 @@ export default function RasterMapPage() {
     
     // Stats
     const [totalMatched, setTotalMatched] = useState(0);
-    
-    // Debounce ref
-    const debounceRef = useRef<NodeJS.Timeout | null>(null);
-    const lastBboxRef = useRef<string | null>(null);
 
     // Fetch collections on mount
     useEffect(() => {
@@ -60,14 +55,13 @@ export default function RasterMapPage() {
                 const data = await StacService.getCollections();
                 setCollections(data);
             } catch (error) {
-                console.error('Collections fetch error:', error);
-                message.warning('Kolleksiyalar yüklənmədi - API əlçatan olmaya bilər');
+                message.error('Kolleksiyalar yüklənmədi');
             } finally {
                 setCollectionsLoading(false);
             }
         };
         fetchCollections();
-    }, [message]);
+    }, []);
 
     const handleFilterChange = useCallback((newFilters: Partial<RasterFilterParams>) => {
         setFilters(prev => ({ ...prev, ...newFilters }));
@@ -77,14 +71,14 @@ export default function RasterMapPage() {
         setFilters(prev => ({ ...prev, bbox }));
         setIsDrawingBbox(false);
         message.success('Ərazi seçildi');
-    }, [message]);
+    }, []);
 
-    // Manual search (button click)
     const handleSearch = useCallback(async () => {
         setLoading(true);
         setSelectedItem(null);
         
         try {
+            // Smart search - avtomatik GET/POST seçir
             const response = await StacService.search(filters);
             
             setResults(response.features);
@@ -95,78 +89,19 @@ export default function RasterMapPage() {
             } else {
                 message.success(`${response.features.length} nəticə tapıldı`);
             }
-        } catch (error: any) {
+        } catch (error) {
+            message.error('Axtarış xətası baş verdi');
             console.error('Search error:', error);
-            
-            if (error.code === 'ERR_NETWORK') {
-                message.error('API əlçatan deyil - CORS və ya network problemi');
-            } else {
-                message.error('Axtarış xətası baş verdi');
-            }
         } finally {
             setLoading(false);
         }
-    }, [filters, message]);
-
-    // Auto-search when map moves (with debounce)
-    const handleMapMove = useCallback((bbox: BboxCoords) => {
-        if (!autoSearchEnabled) return;
-        
-        // Eyni bbox üçün təkrar sorğu göndərmə
-        const bboxKey = `${bbox.minLng.toFixed(4)},${bbox.minLat.toFixed(4)},${bbox.maxLng.toFixed(4)},${bbox.maxLat.toFixed(4)}`;
-        if (lastBboxRef.current === bboxKey) return;
-        lastBboxRef.current = bboxKey;
-        
-        // Əvvəlki debounce-u ləğv et
-        if (debounceRef.current) {
-            clearTimeout(debounceRef.current);
-        }
-        
-        // 500ms sonra axtarış et
-        debounceRef.current = setTimeout(async () => {
-            console.log('🔄 Auto-searching for bbox:', bbox);
-            setLoading(true);
-            
-            try {
-                // Filters-i cari bbox ilə yenilə və axtarış et
-                const searchFilters: RasterFilterParams = {
-                    ...filters,
-                    bbox: bbox
-                };
-                
-                const response = await StacService.search(searchFilters);
-                
-                setResults(response.features);
-                setTotalMatched(response.numberMatched || response.features.length);
-                
-                // Filteri də yenilə
-                setFilters(prev => ({ ...prev, bbox }));
-                
-                console.log(`✅ Found ${response.features.length} items`);
-            } catch (error: any) {
-                console.error('Auto-search error:', error);
-                // Auto-search-də error message göstərmə - çox annoying olar
-            } finally {
-                setLoading(false);
-            }
-        }, 500);
-    }, [autoSearchEnabled, filters]);
-
-    // Cleanup debounce on unmount
-    useEffect(() => {
-        return () => {
-            if (debounceRef.current) {
-                clearTimeout(debounceRef.current);
-            }
-        };
-    }, []);
+    }, [filters]);
 
     const handleClearFilters = useCallback(() => {
         setFilters(defaultFilters);
         setResults([]);
         setSelectedItem(null);
         setTotalMatched(0);
-        lastBboxRef.current = null;
     }, []);
 
     const handleItemSelect = useCallback((item: StacItem) => {
@@ -192,17 +127,6 @@ export default function RasterMapPage() {
                 <Title level={4} style={{ margin: 0 }}>
                     🗺️ Raster Map Explorer
                 </Title>
-                
-                <Space>
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                        Avtomatik axtarış:
-                    </Text>
-                    <Switch 
-                        checked={autoSearchEnabled}
-                        onChange={setAutoSearchEnabled}
-                        size="small"
-                    />
-                </Space>
             </Header>
 
             <Layout>
@@ -247,8 +171,6 @@ export default function RasterMapPage() {
                         onItemSelect={handleItemSelect}
                         collapsed={collapsed}
                         onToggleSidebar={() => setCollapsed(!collapsed)}
-                        // onMapMove={handleMapMove}
-                        loading={loading}
                     />
                 </Layout.Content>
             </Layout>

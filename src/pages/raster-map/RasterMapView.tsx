@@ -1,16 +1,16 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { MapContainer, TileLayer, Rectangle, Polygon, useMapEvents, useMap, LayersControl, Popup } from 'react-leaflet';
-import { Button, Space, Typography, Alert, Card, Tag } from 'antd';
+import { Button, Space, Typography, Alert, Tag, Switch, Tooltip } from 'antd';
 import { 
     MenuFoldOutlined, 
     MenuUnfoldOutlined,
     FullscreenOutlined,
     FullscreenExitOutlined,
-    CloudOutlined,
-    CalendarOutlined,
-    LoadingOutlined
+    LoadingOutlined,
+    EnvironmentOutlined
 } from '@ant-design/icons';
 import type { BboxCoords, StacItem } from '../../types/raster.map.type';
+import VectorPointsLayer from '../../components/map/VectorPointsLayer';
 import dayjs from 'dayjs';
 import 'leaflet/dist/leaflet.css';
 
@@ -209,9 +209,26 @@ const ItemFootprint: React.FC<{
     isSelected: boolean;
     onSelect: () => void;
 }> = ({ item, isSelected, onSelect }) => {
-    if (item.geometry.type !== 'Polygon') return null;
+    // ✅ Geometry validation
+    if (!item.geometry || !item.geometry.type || !item.geometry.coordinates) {
+        console.warn('Invalid geometry for item:', item.id);
+        return null;
+    }
 
-    const positions = item.geometry.coordinates[0].map(
+    // ✅ Only support Polygon type
+    if (item.geometry.type !== 'Polygon') {
+        console.warn('Unsupported geometry type:', item.geometry.type, 'for item:', item.id);
+        return null;
+    }
+
+    // ✅ Safe coordinates access
+    const coordinates = item.geometry.coordinates[0];
+    if (!coordinates || !Array.isArray(coordinates) || coordinates.length < 3) {
+        console.warn('Invalid coordinates for item:', item.id);
+        return null;
+    }
+
+    const positions = coordinates.map(
         (coord: [number, number]) => [coord[1], coord[0]] as [number, number]
     );
 
@@ -375,6 +392,8 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
     loading = false
 }) => {
     const [isFullscreen, setIsFullscreen] = useState(false);
+    // ✅ YENİ: Vector points state
+    const [showVectorPoints, setShowVectorPoints] = useState(false);
 
     const toggleFullscreen = useCallback(() => {
         if (!document.fullscreenElement) {
@@ -451,6 +470,33 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
                         onClick={toggleFullscreen}
                     />
                 </Space>
+            </div>
+
+            {/* ✅ YENİ: Vector Points Toggle */}
+            <div style={{
+                position: 'absolute',
+                top: 10,
+                left: 60,
+                zIndex: 1000,
+                background: 'rgba(255,255,255,0.95)',
+                padding: '8px 12px',
+                borderRadius: 8,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+            }}>
+                <Tooltip title="Vektor nöqtələrini göstər/gizlət (PyGeoAPI)">
+                    <Space>
+                        <EnvironmentOutlined style={{ color: showVectorPoints ? '#1677ff' : '#999' }} />
+                        <Switch
+                            size="small"
+                            checked={showVectorPoints}
+                            onChange={setShowVectorPoints}
+                        />
+                        <Text style={{ fontSize: 12 }}>Nöqtələr</Text>
+                    </Space>
+                </Tooltip>
             </div>
 
             {/* Loading Indicator */}
@@ -541,12 +587,6 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
                 {/* Map Drag Controller */}
                 <MapDragController isDrawing={isDrawingBbox} />
 
-                {/* Map Move Handler - yeni!
-                <MapMoveHandler 
-                    onMapMove={onMapMove} 
-                    isDrawing={isDrawingBbox}
-                /> */}
-
                 <LayersControl position="topright">
                     <BaseLayer checked name="🛰️ Satellite">
                         <TileLayer
@@ -613,6 +653,14 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
                         onSelect={() => onItemSelect(item)}
                     />
                 ))}
+
+                {/* ✅ YENİ: Vector Points Layer */}
+                <VectorPointsLayer
+                    collectionId="azeriqaz_wtr_points"
+                    visible={showVectorPoints}
+                    color="#1677ff"
+                    maxPoints={5000}
+                />
             </MapContainer>
         </div>
     );

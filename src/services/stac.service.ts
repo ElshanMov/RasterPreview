@@ -1,73 +1,88 @@
+import axios from 'axios';
 import type { 
+    StacSearchGetParams,
     StacSearchPostRequest,
     StacSearchResponse, 
+    StacItem, 
     StacCollection,
-    RasterFilterParams,
-    BboxCoords
+    RasterFilterParams
 } from '../types/raster.map.type';
-import axios from 'axios';
 
-// Development-də proxy istifadə et, production-da birbaşa URL
-const STAC_API_URL = import.meta.env.DEV 
-    ? '/stac-api'  // Vite proxy vasitəsilə
-    : 'http://stac.mmdev.az';
+// ✅ STAC API - Vite proxy vasitəsilə
+const STAC_API_URL = '/stac-api';
 
-// ==========================================
-// Helpers
-// ==========================================
-
-/**
- * Bbox koordinatlarını valid WGS84 aralığına normalize edir
- * STAC API tələb edir: lng [-180, 180], lat [-90, 90]
- */
-const normalizeBbox = (bbox: BboxCoords): BboxCoords => {
-    // Longitude-u [-180, 180] aralığına wrap et
-    const wrapLng = (lng: number): number => {
-        while (lng > 180) lng -= 360;
-        while (lng < -180) lng += 360;
-        return lng;
-    };
-    
-    // Latitude-u [-90, 90] aralığına clamp et
-    const clampLat = (lat: number): number => {
-        return Math.max(-90, Math.min(90, lat));
-    };
-    
-    return {
-        minLng: wrapLng(bbox.minLng),
-        maxLng: wrapLng(bbox.maxLng),
-        minLat: clampLat(bbox.minLat),
-        maxLat: clampLat(bbox.maxLat)
-    };
-};
-
-/**
- * Bbox-un valid olub olmadığını yoxlayır
- */
-const isValidBbox = (bbox: BboxCoords): boolean => {
-    // Çox böyük bbox-ları reject et (bütün dünya)
-    const lngSpan = Math.abs(bbox.maxLng - bbox.minLng);
-    const latSpan = Math.abs(bbox.maxLat - bbox.minLat);
-    
-    // Əgər bbox bütün dünyadan böyükdürsə, sorğu göndərmə
-    if (lngSpan > 360 || latSpan > 180) {
-        console.log('⚠️ Bbox too large, skipping search');
-        return false;
+// ✅ STAC üçün ayrıca axios instance (token lazım deyil)
+const stacAxios = axios.create({
+    baseURL: STAC_API_URL,
+    headers: {
+        'Content-Type': 'application/json'
     }
-    
-    return true;
-};
+});
+
+/**
+ * STAC API Service
+ * 
+ * GET /search  - Sadə sorğular üçün (query string)
+ * POST /search - Mürəkkəb sorğular üçün (JSON body)
+ * GET /collections - Kolleksiyaları əldə etmək
+ */
 
 // ==========================================
 // Converters
 // ==========================================
 
 /**
- * BboxCoords-dan STAC bbox formatına çevir (normalized)
+ * UI Filter State-dən GET params-a çevir
  */
-export const bboxCoordsToArray = (bbox: BboxCoords): [number, number, number, number] => {
-    const normalized = normalizeBbox(bbox);
-    return [normalized.minLng, normalized.minLat, normalized.maxLng, normalized.maxLat];
+export const buildGetParams = (filters: RasterFilterParams): StacSearchGetParams => {
+    const params: StacSearchGetParams = {};
+
+    if (filters.collections.length > 0) {
+        params.collections = filters.collections.join(',');
+    }
+
+    if (filters.ids) {
+        params.ids = filters.ids;
+    }
+
+    if (filters.bbox) {
+        params.bbox = `${filters.bbox.minLng},${filters.bbox.minLat},${filters.bbox.maxLng},${filters.bbox.maxLat}`;
+    }
+
+    if (filters.dateRange) {
+        params.datetime = `${filters.dateRange[0]}/${filters.dateRange[1]}`;
+    }
+
+    params.limit = filters.limit;
+
+    // Query as JSON string
+    const query: Record<string, any> = {};
+    
+    // ✅ Data type filter
+    if (filters.dataType && filters.dataType !== 'all') {
+        query['data_type'] = { eq: filters.dataType };
+    }
+    
+    if (filters.cloudCover !== null) {
+        query['eo:cloud_cover'] = { lte: filters.cloudCover };
+    }
+    if (filters.resolution) {
+        query['gsd'] = { gte: filters.resolution[0], lte: filters.resolution[1] };
+    }
+    if (Object.keys(query).length > 0) {
+        params.query = JSON.stringify(query);
+    }
+
+    // Sortby as JSON string
+    if (filters.sortBy) {
+        params.sortby = JSON.stringify([filters.sortBy]);
+    }
+
+    if (filters.token) {
+        params.token = filters.token;
+    }
+
+    return params;
 };
 
 /**
@@ -85,33 +100,42 @@ export const buildPostBody = (filters: RasterFilterParams): StacSearchPostReques
     }
 
     if (filters.bbox) {
-        body.bbox = bboxCoordsToArray(filters.bbox);
+        body.bbox = [
+            filters.bbox.minLng,
+            filters.bbox.minLat,
+            filters.bbox.maxLng,
+            filters.bbox.maxLat
+        ];
     }
 
-    // DateTime - STAC API formatını yoxla
-    // Bəzi API-lər aralıq qəbul etmir, yalnız tək tarix qəbul edir
-    // if (filters.dateRange) {
-    //     body.datetime = `${filters.dateRange[0]}/${filters.dateRange[1]}`;
-    // }
+    if (filters.dateRange) {
+        body.datetime = `${filters.dateRange[0]}/${filters.dateRange[1]}`;
+    }
 
-    body.limit = filters.limit || 50;
+    body.limit = filters.limit;
 
-    // Query object - yalnız dəyər varsa əlavə et
+    // Query object
     const query: Record<string, any> = {};
-    if (filters.cloudCover !== null && filters.cloudCover !== undefined) {
+    
+    // ✅ Data type filter
+    if (filters.dataType && filters.dataType !== 'all') {
+        query['data_type'] = { eq: filters.dataType };
+    }
+    
+    if (filters.cloudCover !== null) {
         query['eo:cloud_cover'] = { lte: filters.cloudCover };
     }
-    if (filters.resolution && filters.resolution[0] !== null && filters.resolution[1] !== null) {
+    if (filters.resolution) {
         query['gsd'] = { gte: filters.resolution[0], lte: filters.resolution[1] };
     }
     if (Object.keys(query).length > 0) {
         body.query = query;
     }
 
-    // Sortby - bəzi STAC API-lər dəstəkləmir, ona görə optional
-    // if (filters.sortBy) {
-    //     body.sortby = [filters.sortBy];
-    // }
+    // Sortby array
+    if (filters.sortBy) {
+        body.sortby = [filters.sortBy];
+    }
 
     if (filters.token) {
         body.token = filters.token;
@@ -120,114 +144,63 @@ export const buildPostBody = (filters: RasterFilterParams): StacSearchPostReques
     return body;
 };
 
+/**
+ * Filterin mürəkkəbliyinə görə GET və ya POST seçilməsini təyin edir
+ */
+export const shouldUsePost = (filters: RasterFilterParams): boolean => {
+    // Geo filterlər varsa POST istifadə et
+    if (filters.bbox) return true;
+    
+    // Mürəkkəb query varsa POST istifadə et
+    if (filters.cloudCover !== null || filters.resolution !== null) return true;
+    
+    // ✅ Data type filter varsa POST istifadə et
+    if (filters.dataType && filters.dataType !== 'all') return true;
+    
+    // Çoxlu collection varsa POST istifadə et
+    if (filters.collections.length > 3) return true;
+    
+    // Sadə sorğular üçün GET kifayətdir
+    return false;
+};
+
 // ==========================================
-// STAC Service - Real API
+// STAC Service
 // ==========================================
 
 export const StacService = {
     /**
-     * POST /search
-     * Əsas axtarış metodu - bütün sorğular POST ilə gedir
+     * GET /search
+     * Sadə sorğular üçün - query string
      */
-    search: async (filters: RasterFilterParams): Promise<StacSearchResponse> => {
-        // Bbox validation
-        if (filters.bbox && !isValidBbox(filters.bbox)) {
-            return {
-                type: 'FeatureCollection',
-                features: [],
-                links: [],
-                numberMatched: 0,
-                numberReturned: 0
-            };
-        }
-        
-        const body = buildPostBody(filters);
-        
-        console.log('🔍 STAC Search POST:', body);
-        console.log('📡 URL:', `${STAC_API_URL}/search`);
-        
-        try {
-            const response = await axios.post<StacSearchResponse>(
-                `${STAC_API_URL}/search`,
-                body,
-                {
-                    headers: {
-                        'Content-Type': 'application/json',
-                    }
-                }
-            );
-            
-            console.log('✅ STAC Response:', response.data);
-            
-            // STAC API response formatını normalize et
-            const data = response.data;
-            
-            return {
-                type: 'FeatureCollection',
-                features: data.features || [],
-                links: data.links || [],
-                context: data.context,
-                numberMatched: data.numberMatched ?? data.context?.matched ?? data.features?.length ?? 0,
-                numberReturned: data.numberReturned ?? data.context?.returned ?? data.features?.length ?? 0
-            };
-        } catch (error: any) {
-            console.error('❌ STAC Search Error:', error);
-            
-            if (error.response) {
-                console.error('   Status:', error.response.status);
-                console.error('   Data:', error.response.data);
-            }
-            
-            throw error;
-        }
+    searchGet: async (params: StacSearchGetParams): Promise<StacSearchResponse> => {
+        console.log('🔍 STAC Search GET:', params);
+        const response = await stacAxios.get('/search', { params });
+        console.log('✅ GET Response:', response.data);
+        return response.data;
     },
 
     /**
-     * Bbox ilə axtarış - xəritə hərəkət edəndə istifadə olunur
+     * POST /search
+     * Mürəkkəb sorğular üçün - JSON body
      */
-    searchByBbox: async (bbox: BboxCoords, limit: number = 50): Promise<StacSearchResponse> => {
-        // Bbox validation
-        if (!isValidBbox(bbox)) {
-            return {
-                type: 'FeatureCollection',
-                features: [],
-                links: [],
-                numberMatched: 0,
-                numberReturned: 0
-            };
-        }
-        
-        const body: StacSearchPostRequest = {
-            bbox: bboxCoordsToArray(bbox),
-            limit
-        };
-        
-        console.log('🗺️ STAC Search by Bbox:', body);
-        
-        try {
-            const response = await axios.post<StacSearchResponse>(
-                `${STAC_API_URL}/search`,
-                body,
-                {
-                    headers: {
-                        'Content-Type': 'application/json',
-                    }
-                }
-            );
-            
-            const data = response.data;
-            
-            return {
-                type: 'FeatureCollection',
-                features: data.features || [],
-                links: data.links || [],
-                context: data.context,
-                numberMatched: data.numberMatched ?? data.features?.length ?? 0,
-                numberReturned: data.numberReturned ?? data.features?.length ?? 0
-            };
-        } catch (error: any) {
-            console.error('❌ STAC Bbox Search Error:', error);
-            throw error;
+    searchPost: async (body: StacSearchPostRequest): Promise<StacSearchResponse> => {
+        console.log('🔍 STAC Search POST:', body);
+        const response = await stacAxios.post('/search', body);
+        console.log('✅ POST Response:', response.data);
+        return response.data;
+    },
+
+    /**
+     * Smart search - avtomatik GET və ya POST seçir
+     */
+    search: async (filters: RasterFilterParams): Promise<StacSearchResponse> => {
+        if (shouldUsePost(filters)) {
+            const body = buildPostBody(filters);
+            return StacService.searchPost(body);
+        } else {
+            const params = buildGetParams(filters);
+            return StacService.searchGet(params);
         }
     },
 
@@ -235,33 +208,18 @@ export const StacService = {
      * GET /collections
      */
     getCollections: async (): Promise<StacCollection[]> => {
-        console.log('📁 Get Collections from:', `${STAC_API_URL}/collections`);
+        console.log('📁 Get Collections');
+        const response = await stacAxios.get('/collections');
+        console.log('✅ Collections Response:', response.data);
         
-        try {
-            const response = await axios.get(`${STAC_API_URL}/collections`);
-            
-            // Response-un JSON olub olmadığını yoxla
-            if (typeof response.data === 'string') {
-                console.error('❌ Collections response is HTML, not JSON. Proxy might not be working.');
-                return [];
-            }
-            
-            // STAC collections response: { collections: [...] }
-            const collections = response.data.collections || response.data || [];
-            
-            // Array olduğunu yoxla
-            if (!Array.isArray(collections)) {
-                console.error('❌ Collections is not an array:', collections);
-                return [];
-            }
-            
-            console.log('✅ Collections:', collections);
-            
-            return collections;
-        } catch (error: any) {
-            console.error('❌ Get Collections Error:', error);
-            return [];
+        // STAC API { collections: [...] } formatında qaytarır
+        if (response.data.collections) {
+            return response.data.collections;
         }
+        if (Array.isArray(response.data)) {
+            return response.data;
+        }
+        return [];
     },
 
     /**
@@ -269,13 +227,16 @@ export const StacService = {
      */
     getCollection: async (id: string): Promise<StacCollection | null> => {
         console.log('📁 Get Collection:', id);
-        
-        try {
-            const response = await axios.get(`${STAC_API_URL}/collections/${id}`);
-            return response.data;
-        } catch (error) {
-            console.error('❌ Get Collection Error:', error);
-            return null;
-        }
+        const response = await stacAxios.get(`/collections/${id}`);
+        return response.data;
+    },
+
+    /**
+     * GET /items/{id}
+     */
+    getItem: async (id: string): Promise<StacItem | null> => {
+        console.log('📄 Get Item:', id);
+        const response = await stacAxios.get(`/items/${id}`);
+        return response.data;
     }
 };

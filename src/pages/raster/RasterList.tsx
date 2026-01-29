@@ -13,8 +13,10 @@ export default function RasterList() {
     const fetchRasters = useCallback(async () => {
         try {
             setLoading(true);
-            const response = await RasterService.getRasters();
-            setItems(response.data || []);
+            //todo data endpointini əlavə et
+            // const response = await RasterService.getRasters();
+            // setItems(response.data || []);
+            setItems([]); // Placeholder boş siyahı
         } catch (error) {
             message.error("Məlumatlar yüklənmədi");
         } finally {

@@ -2,6 +2,9 @@
 // STAC Search API - GET & POST Types
 // ==========================================
 
+// ✅ YENİ: Data Type - Raster və ya Vector seçimi üçün
+export type DataType = 'all' | 'raster' | 'vector';
+
 export interface BboxCoords {
     minLat: number;
     maxLat: number;
@@ -10,7 +13,7 @@ export interface BboxCoords {
 }
 
 // ==========================================
-// GET Request - Query String Parameters (legacy, not used)
+// GET Request - Query String Parameters
 // ==========================================
 
 export interface StacSearchGetParams {
@@ -73,6 +76,9 @@ export interface RasterFilterParams {
     ids: string;
     searchText: string;
     
+    // ✅ YENİ: Data Type filter
+    dataType: DataType;
+    
     // Advanced filters
     cloudCover: number | null;
     resolution: [number, number] | null;
@@ -109,6 +115,12 @@ export interface StacItemProperties {
     'eo:cloud_cover'?: number;
     'proj:epsg'?: number;
     'gsd'?: number;
+    // ✅ YENİ: Backend-dən gələcək data_type
+    data_type?: 'raster' | 'vector';
+    // Vector-specific properties
+    feature_count?: number;
+    pipeline_type?: string;
+    organization_id?: string;
     [key: string]: any;
 }
 

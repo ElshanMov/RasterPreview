@@ -224,7 +224,7 @@ const FileStep: React.FC<FileStepProps> = ({
                     onClick={onNext}
                     disabled={!analysisComplete}
                 >
-                    Növbəti: Rejim Seçimi →
+                    Növbəti →
                 </Button>
             </div>
 
