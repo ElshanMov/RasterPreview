@@ -1,42 +1,36 @@
 /**
  * TiTiler Service
  * 
- * Bu servis TiTiler API ilə əlaqə qurur.
+ * COG (Cloud Optimized GeoTIFF) faylları üçün tile və metadata servisi.
+ * Vite proxy vasitəsilə TiTiler backend-ə qoşulur.
  * 
- * ⚠️ DEVOPS QEYDI: 
- * S3 connection timeout problemləri aşkar edilib.
- * TiTiler deployment-ə aşağıdakı env vars əlavə edilməlidir:
- * 
- * - GDAL_HTTP_TIMEOUT=60
- * - GDAL_HTTP_MAX_RETRY=5
- * - GDAL_HTTP_RETRY_DELAY=1
- * - CPL_VSIL_CURL_CACHE_SIZE=200000000
+ * Development: /titiler-api → https://tiles.mmdev.az/tiles
+ * Production:  https://tiles.mmdev.az/tiles
  */
 
-import axios from 'axios';
+// ============================================================================
+// Configuration
+// ============================================================================
 
-// TiTiler base URL - environment-dən və ya default
-const TITILER_BASE_URL = import.meta.env.VITE_TITILER_URL || 'https://tiles.mmdev.az';
+// Development-də Vite proxy istifadə edirik
+// Production-da birbaşa TiTiler URL
+const TITILER_BASE_URL = import.meta.env.DEV 
+    ? '/titiler-api'           // Vite proxy: /titiler-api → https://tiles.mmdev.az/tiles
+    : 'https://tiles.mmdev.az/tiles';
 
-// TiTiler endpoint prefix (server konfiqurasiyasına görə)
-const TITILER_ENDPOINT_PREFIX = '/tiles';
-
-// Axios instance
-const titilerAxios = axios.create({
-    baseURL: TITILER_BASE_URL,
-    timeout: 30000,
-});
+// COG endpoint path
+const COG_PATH = '/cog';
 
 // ============================================================================
 // Types
 // ============================================================================
 
 export interface CogInfo {
-    bounds: [number, number, number, number];
+    bounds: [number, number, number, number];  // [minLng, minLat, maxLng, maxLat]
     minzoom: number;
     maxzoom: number;
-    band_metadata: [string, Record<string, any>][];
-    band_descriptions: [string, string][];
+    band_metadata: Array<[string, Record<string, any>]>;
+    band_descriptions: Array<[string, string]>;
     dtype: string;
     nodata_type: string;
     colorinterp: string[];
@@ -48,39 +42,24 @@ export interface CogInfo {
 }
 
 export interface CogStatistics {
-    [bandKey: string]: {
+    [band: string]: {
         min: number;
         max: number;
         mean: number;
-        std: number;
+        stddev: number;
         count: number;
         sum: number;
-        median?: number;
-        majority?: number;
-        minority?: number;
-        unique?: number;
-        histogram?: [number[], number[]];
-        valid_percent?: number;
-        masked_pixels?: number;
-        valid_pixels?: number;
-        percentile_2?: number;
-        percentile_98?: number;
+        percentile_2: number;
+        percentile_98: number;
     };
 }
 
-export interface CogBounds {
-    bounds: [number, number, number, number];
-}
-
 export interface TileUrlOptions {
-    tileMatrixSetId?: string;
-    scale?: number;
     format?: 'png' | 'jpg' | 'webp';
     bidx?: number[];
     rescale?: string[];
     colormap?: string;
     nodata?: number;
-    returnMask?: boolean;
 }
 
 // ============================================================================
@@ -89,200 +68,180 @@ export interface TileUrlOptions {
 
 export const TitilerService = {
     /**
-     * COG info əldə et
+     * COG haqqında metadata al
      */
     getInfo: async (cogUrl: string): Promise<CogInfo> => {
-        console.log('📊 TiTiler: Getting COG info...');
-        const encodedUrl = encodeURIComponent(cogUrl);
-        const response = await titilerAxios.get(`${TITILER_ENDPOINT_PREFIX}/cog/info?url=${encodedUrl}`);
-        console.log('✅ TiTiler: COG info received', {
-            bands: response.data.count,
-            size: `${response.data.width}x${response.data.height}`,
-            dtype: response.data.dtype
-        });
-        return response.data;
+        const url = `${TITILER_BASE_URL}${COG_PATH}/info?url=${encodeURIComponent(cogUrl)}`;
+        console.log('📊 TiTiler info request:', url);
+        
+        const response = await fetch(url);
+        
+        if (!response.ok) {
+            const text = await response.text();
+            console.error('TiTiler info error:', response.status, text);
+            throw new Error(`TiTiler info error: ${response.status} - ${text}`);
+        }
+        
+        const data = await response.json();
+        console.log('✅ TiTiler info response:', data);
+        return data;
     },
 
     /**
-     * COG statistics əldə et
+     * COG bounds al (bbox)
+     */
+    getBounds: async (cogUrl: string): Promise<[number, number, number, number]> => {
+        const url = `${TITILER_BASE_URL}${COG_PATH}/bounds?url=${encodeURIComponent(cogUrl)}`;
+        console.log('📍 TiTiler bounds request:', url);
+        
+        const response = await fetch(url);
+        
+        if (!response.ok) {
+            throw new Error(`TiTiler bounds error: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        return data.bounds;
+    },
+
+    /**
+     * COG statistikası al
      */
     getStatistics: async (cogUrl: string): Promise<CogStatistics> => {
-        console.log('📈 TiTiler: Getting COG statistics...');
-        const encodedUrl = encodeURIComponent(cogUrl);
-        const response = await titilerAxios.get(`${TITILER_ENDPOINT_PREFIX}/cog/statistics?url=${encodedUrl}`);
-        console.log('✅ TiTiler: Statistics received');
-        return response.data;
+        const url = `${TITILER_BASE_URL}${COG_PATH}/statistics?url=${encodeURIComponent(cogUrl)}`;
+        console.log('📈 TiTiler statistics request:', url);
+        
+        const response = await fetch(url);
+        
+        if (!response.ok) {
+            const text = await response.text();
+            console.error('TiTiler statistics error:', response.status, text);
+            throw new Error(`TiTiler statistics error: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log('✅ TiTiler statistics response:', data);
+        return data;
     },
 
     /**
-     * COG bounds əldə et
+     * Preview URL yarat
      */
-    getBounds: async (cogUrl: string): Promise<CogBounds> => {
-        console.log('🗺️ TiTiler: Getting COG bounds...');
-        const encodedUrl = encodeURIComponent(cogUrl);
-        const response = await titilerAxios.get(`${TITILER_ENDPOINT_PREFIX}/cog/bounds?url=${encodedUrl}`);
-        console.log('✅ TiTiler: Bounds received', response.data.bounds);
-        return response.data;
+    getPreviewUrl: (cogUrl: string, options: TileUrlOptions = {}): string => {
+        const params = new URLSearchParams();
+        params.append('url', cogUrl);
+        
+        // Default max_size
+        params.append('max_size', '512');
+        
+        // Band indexes
+        if (options.bidx && options.bidx.length > 0) {
+            options.bidx.forEach(b => params.append('bidx', String(b)));
+        }
+        
+        // Rescale
+        if (options.rescale && options.rescale.length > 0) {
+            options.rescale.forEach(r => params.append('rescale', r));
+        }
+        
+        // Format
+        const format = options.format || 'png';
+        
+        return `${TITILER_BASE_URL}${COG_PATH}/preview.${format}?${params.toString()}`;
     },
 
     /**
-     * Tile URL yarat
-     * 
-     * ⚠️ VACIB: .png extension MÜTLƏQ lazımdır!
-     * Əks halda TiTiler bütün band-ları göndərir və PNG driver xəta verir.
+     * Tile URL template yarat
+     * {z}/{x}/{y} placeholder-ları ilə
      */
     buildTileUrl: (cogUrl: string, options: TileUrlOptions = {}): string => {
-        const {
-            tileMatrixSetId = 'WebMercatorQuad',
-            scale = 1,
-            format = 'png',  // ⚠️ Default PNG - vacibdir!
-            bidx,
-            rescale,
-            colormap,
-            nodata,
-            returnMask = false,
-        } = options;
-
-        const encodedUrl = encodeURIComponent(cogUrl);
+        const params = new URLSearchParams();
+        params.append('url', cogUrl);
         
-        // ⚠️ VACIB: .${format} MÜTLƏQ olmalıdır!
-        let url = `${TITILER_BASE_URL}${TITILER_ENDPOINT_PREFIX}/cog/tiles/${tileMatrixSetId}/{z}/{x}/{y}@${scale}x.${format}?url=${encodedUrl}`;
-
-        // Band indexes - hər band üçün ayrı bidx parametri
-        if (bidx && bidx.length > 0) {
-            bidx.forEach(b => {
-                url += `&bidx=${b}`;
-            });
+        // Band indexes
+        if (options.bidx && options.bidx.length > 0) {
+            options.bidx.forEach(b => params.append('bidx', String(b)));
         }
-
-        // Rescale - hər band üçün ayrı rescale parametri
-        if (rescale && rescale.length > 0) {
-            rescale.forEach(r => {
-                url += `&rescale=${r}`;
-            });
+        
+        // Rescale
+        if (options.rescale && options.rescale.length > 0) {
+            options.rescale.forEach(r => params.append('rescale', r));
         }
-
+        
         // Colormap
-        if (colormap) {
-            url += `&colormap_name=${colormap}`;
+        if (options.colormap) {
+            params.append('colormap_name', options.colormap);
         }
-
-        // Nodata
-        if (nodata !== undefined) {
-            url += `&nodata=${nodata}`;
-        }
-
-        // Return mask
-        if (returnMask) {
-            url += `&return_mask=true`;
-        }
-
-        return url;
-    },
-
-    /**
-     * Preview image URL yarat
-     */
-    buildPreviewUrl: (cogUrl: string, options: {
-        width?: number;
-        height?: number;
-        format?: 'png' | 'jpg' | 'webp';
-        bidx?: number[];
-        rescale?: string[];
-        colormap?: string;
-    } = {}): string => {
-        const {
-            width = 256,
-            height = 256,
-            format = 'png',
-            bidx,
-            rescale,
-            colormap,
-        } = options;
-
-        const encodedUrl = encodeURIComponent(cogUrl);
-        let url = `${TITILER_BASE_URL}${TITILER_ENDPOINT_PREFIX}/cog/preview.${format}?url=${encodedUrl}&width=${width}&height=${height}`;
-
-        if (bidx && bidx.length > 0) {
-            bidx.forEach(b => {
-                url += `&bidx=${b}`;
-            });
-        }
-
-        if (rescale && rescale.length > 0) {
-            rescale.forEach(r => {
-                url += `&rescale=${r}`;
-            });
-        }
-
-        if (colormap) {
-            url += `&colormap_name=${colormap}`;
-        }
-
-        return url;
-    },
-
-    /**
-     * Optimal rescale dəyərlərini hesabla
-     */
-    calculateRescale: (statistics: CogStatistics, bandCount: number = 3): string[] => {
-        const rescaleValues: string[] = [];
-        const keys = Object.keys(statistics);
-
-        for (let i = 0; i < Math.min(bandCount, keys.length); i++) {
-            const bandKey = keys[i];
-            const bandStats = statistics[bandKey];
-
-            if (!bandStats) {
-                rescaleValues.push('0,255');
-                continue;
-            }
-
-            // 2%-98% percentile istifadə et (daha yaxşı contrast)
-            const low = bandStats.percentile_2 ?? bandStats.min ?? 0;
-            const high = bandStats.percentile_98 ?? bandStats.max ?? 255;
-
-            if (low === high) {
-                rescaleValues.push('0,255');
-            } else {
-                rescaleValues.push(`${Math.floor(low)},${Math.ceil(high)}`);
-            }
-        }
-
-        return rescaleValues;
+        
+        // Format
+        const format = options.format || 'png';
+        
+        // TileMatrixSet - WebMercatorQuad standart
+        const tileUrl = `${TITILER_BASE_URL}${COG_PATH}/tiles/WebMercatorQuad/{z}/{x}/{y}@1x.${format}?${params.toString()}`;
+        
+        console.log('🔗 Tile URL template:', tileUrl.replace('{z}/{x}/{y}', '...'));
+        return tileUrl;
     },
 
     /**
      * Band indexes təyin et
+     * RGB üçün 1,2,3 və ya 1-band üçün [1]
      */
     getBandIndexes: (info: CogInfo): number[] => {
-        // 3+ band varsa, RGB üçün ilk 3 bandı istifadə et
-        if (info.count >= 3) {
-            // Colorinterp-ə görə düzgün bandları tap
-            if (info.colorinterp) {
-                const redIdx = info.colorinterp.findIndex(c => c === 'red') + 1;
-                const greenIdx = info.colorinterp.findIndex(c => c === 'green') + 1;
-                const blueIdx = info.colorinterp.findIndex(c => c === 'blue') + 1;
-
-                if (redIdx > 0 && greenIdx > 0 && blueIdx > 0) {
-                    return [redIdx, greenIdx, blueIdx];
-                }
-            }
-            // Default: ilk 3 band
+        const bandCount = info.count || 1;
+        
+        // 3+ band varsa RGB
+        if (bandCount >= 3) {
             return [1, 2, 3];
         }
-
+        
         // Tək band
         return [1];
     },
 
     /**
-     * Bounds-u Leaflet formatına çevir
+     * Rescale dəyərləri hesabla
+     * Statistics-dən percentile_2 və percentile_98 istifadə edir
      */
-    parseBounds: (bounds: CogBounds): [[number, number], [number, number]] | null => {
-        if (!bounds || !bounds.bounds) return null;
-        const [minX, minY, maxX, maxY] = bounds.bounds;
-        return [[minY, minX], [maxY, maxX]];
+    calculateRescale: (statistics: CogStatistics, bandCount: number = 3): string[] => {
+        const rescale: string[] = [];
+        
+        for (let i = 1; i <= bandCount; i++) {
+            const bandKey = `b${i}`;
+            const bandStats = statistics[bandKey];
+            
+            if (bandStats) {
+                const low = Math.floor(bandStats.percentile_2 || bandStats.min || 0);
+                const high = Math.ceil(bandStats.percentile_98 || bandStats.max || 255);
+                rescale.push(`${low},${high}`);
+            } else {
+                // Default rescale
+                rescale.push('0,255');
+            }
+        }
+        
+        return rescale;
+    },
+
+    /**
+     * Tek tile yüklə (test üçün)
+     */
+    fetchTile: async (cogUrl: string, z: number, x: number, y: number, options: TileUrlOptions = {}): Promise<Blob> => {
+        const tileUrlTemplate = TitilerService.buildTileUrl(cogUrl, options);
+        const tileUrl = tileUrlTemplate
+            .replace('{z}', String(z))
+            .replace('{x}', String(x))
+            .replace('{y}', String(y));
+        
+        console.log('🖼️ Fetching tile:', tileUrl);
+        
+        const response = await fetch(tileUrl);
+        
+        if (!response.ok) {
+            throw new Error(`Tile fetch error: ${response.status}`);
+        }
+        
+        return response.blob();
     }
 };
 

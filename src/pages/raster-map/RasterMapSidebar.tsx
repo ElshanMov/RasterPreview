@@ -16,8 +16,7 @@ import {
     Collapse,
     InputNumber,
     Badge,
-    Segmented,
-    Image
+    Segmented
 } from 'antd';
 import { 
     SearchOutlined, 
@@ -31,7 +30,6 @@ import {
     FilterOutlined,
     SortAscendingOutlined,
     ExpandAltOutlined,
-    FileImageOutlined,
     AppstoreOutlined,
     PictureOutlined,
     NodeIndexOutlined,
@@ -48,9 +46,12 @@ import type {
 } from '../../types/raster.map.type';
 import dayjs from 'dayjs';
 
-// Development-də Vite proxy, production-da birbaşa URL
-const TITILER_URL = import.meta.env.DEV ? '/titiler-api' : 'https://tiles.mmdev.az';
-const COG_PATH = '/tiles/cog';
+// ============================================================================
+// ✅ DÜZƏLDİLMİŞ TiTiler URL konfiqurasiyası
+// ============================================================================
+// Development: /titiler-api → Vite proxy → https://tiles.mmdev.az/tiles
+// Production:  https://tiles.mmdev.az/tiles
+const TITILER_BASE = import.meta.env.DEV ? '/titiler-api' : 'https://tiles.mmdev.az/tiles';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -126,16 +127,6 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
         filters.resolution !== null
     ].filter(Boolean).length;
 
-    const getDataTypeBadge = (item: StacItem) => {
-        const dataType = item.properties.data_type;
-        if (dataType === 'raster') {
-            return <Tag color="blue" style={{ fontSize: 10 }}><PictureOutlined /> Raster</Tag>;
-        } else if (dataType === 'vector') {
-            return <Tag color="purple" style={{ fontSize: 10 }}><NodeIndexOutlined /> Vector</Tag>;
-        }
-        return <Tag style={{ fontSize: 10 }}>Unknown</Tag>;
-    };
-
     // S3 URL-dən fayl adını çıxar (backend böyük hərflə qaytarır: Href)
     const getAssetFileName = (item: StacItem): string | null => {
         const dataAsset = item.assets?.data;
@@ -153,7 +144,9 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                item.assets?.image?.Href || item.assets?.image?.href || null;
     };
 
-    // Raster Thumbnail komponenti - TiTiler statistics ilə preview
+    // ========================================================================
+    // ✅ DÜZƏLDİLMİŞ Raster Thumbnail komponenti
+    // ========================================================================
     const RasterThumbnail: React.FC<{ 
         item: StacItem; 
         isSelected: boolean;
@@ -173,17 +166,22 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
             }
 
             const loadPreview = async () => {
+                setImageLoading(true);
+                setImageError(false);
+                
                 try {
-                    // Statistics yüklə
-                    const statsResponse = await fetch(
-                        `${TITILER_URL}${COG_PATH}/statistics?url=${encodeURIComponent(cogUrl)}`
-                    );
+                    // ✅ DÜZƏLDİLMİŞ URL: /titiler-api/cog/statistics
+                    const statsUrl = `${TITILER_BASE}/cog/statistics?url=${encodeURIComponent(cogUrl)}`;
+                    console.log('📊 Preview statistics URL:', statsUrl);
+                    
+                    const statsResponse = await fetch(statsUrl);
                     
                     if (!statsResponse.ok) {
-                        throw new Error('Statistics yüklənmədi');
+                        throw new Error(`Statistics error: ${statsResponse.status}`);
                     }
                     
                     const stats = await statsResponse.json();
+                    console.log('✅ Statistics loaded for preview:', item.id);
                     
                     // Preview URL yarat rescale ilə
                     const params = new URLSearchParams();
@@ -192,8 +190,8 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                     
                     // İlk 3 band və onların rescale dəyərləri
                     const bands = ['b1', 'b2', 'b3'];
-                    bands.forEach(band => {
-                        params.append('bidx', band.replace('b', ''));
+                    bands.forEach((band, index) => {
+                        params.append('bidx', String(index + 1));
                         if (stats[band]) {
                             const low = Math.floor(stats[band].percentile_2 || 0);
                             const high = Math.ceil(stats[band].percentile_98 || 255);
@@ -203,9 +201,14 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                         }
                     });
                     
-                    setPreviewUrl(`${TITILER_URL}${COG_PATH}/preview.png?${params.toString()}`);
+                    // ✅ DÜZƏLDİLMİŞ URL: /titiler-api/cog/preview.png
+                    const url = `${TITILER_BASE}/cog/preview.png?${params.toString()}`;
+                    console.log('🖼️ Preview URL:', url);
+                    setPreviewUrl(url);
+                    
                 } catch (error) {
-                    console.error('Preview load error:', error);
+                    console.warn('Statistics yüklənmədi, fallback istifadə edilir:', error);
+                    
                     // Fallback - default rescale ilə
                     const params = new URLSearchParams();
                     params.append('url', cogUrl);
@@ -216,12 +219,14 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                     params.append('rescale', '0,500');
                     params.append('rescale', '0,700');
                     params.append('rescale', '0,800');
-                    setPreviewUrl(`${TITILER_URL}${COG_PATH}/preview.png?${params.toString()}`);
+                    
+                    // ✅ DÜZƏLDİLMİŞ URL
+                    setPreviewUrl(`${TITILER_BASE}/cog/preview.png?${params.toString()}`);
                 }
             };
 
             loadPreview();
-        }, [cogUrl]);
+        }, [cogUrl, item.id]);
 
         return (
             <div 
@@ -263,6 +268,7 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                             }}
                             onLoad={() => setImageLoading(false)}
                             onError={() => {
+                                console.error('Preview image load error for:', item.id);
                                 setImageLoading(false);
                                 setImageError(true);
                             }}
@@ -654,7 +660,6 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                             {results.map((item) => {
                                 const isRaster = item.properties.data_type === 'raster';
                                 const isSelected = selectedItem?.id === item.id;
-                                const fileName = getAssetFileName(item);
 
                                 // Raster üçün thumbnail card
                                 if (isRaster) {

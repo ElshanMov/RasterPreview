@@ -196,7 +196,8 @@ debugger
                 properties: {
                     datetime: now,
                     organization_name: values.organizationId,
-                    branch_name: values.branchId
+                    branch_name: values.branchId,
+                    data_type:"raster"
                 },
                 assets: {
                     "data": {  // ✅ Generic key instead of filename

@@ -116,7 +116,7 @@ export interface StacItemProperties {
     'proj:epsg'?: number;
     'gsd'?: number;
     // Backend-dən gələcək data_type
-    data_type?: 'raster' | 'vector';
+    data_type?: 'raster';
     // Vector-specific properties
     feature_count?: number;
     pipeline_type?: string;

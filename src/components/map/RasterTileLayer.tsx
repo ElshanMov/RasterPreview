@@ -205,60 +205,37 @@ const createQueuedTileLayer = (tileUrl: string, options: L.TileLayerOptions = {}
     };
 
     const loadTile = (item: QueuedTile) => {
-        const { coords, tile, done, retryCount } = item;
-        const url = tileUrl
-            .replace('{z}', String(coords.z))
-            .replace('{x}', String(coords.x))
-            .replace('{y}', String(coords.y));
+    const { coords, tile, done } = item;
+    const url = tileUrl
+        .replace('{z}', String(coords.z))
+        .replace('{x}', String(coords.x))
+        .replace('{y}', String(coords.y));
 
-        logger.logTileRequest();
+    logger.logTileRequest();
 
-        fetch(url)
-            .then(response => {
-                if (!response.ok) {
-                    return response.text().then(text => {
-                        throw { status: response.status, body: text };
-                    });
-                }
-                return response.blob();
-            })
-            .then(blob => {
-                tile.src = URL.createObjectURL(blob);
-                logger.logTileSuccess();
-                done(undefined, tile);
-                activeRequests--;
-                processQueue();
-            })
-            .catch((error: any) => {
-                const status = error.status || 0;
-                const errorBody = error.body || '';
-                
-                const isS3Timeout = errorBody.includes('not recognized') ||
-                                   errorBody.includes('vsis3') ||
-                                   errorBody.includes('timeout');
-
-                if (isS3Timeout) {
-                    logger.logS3Timeout(url, errorBody);
-                }
-
-                if (retryCount < MAX_RETRIES) {
-                    const delay = RETRY_DELAYS[retryCount] || 1000;
-                    logger.logTileRetry(url, retryCount + 1);
-                    
-                    setTimeout(() => {
-                        queue.unshift({ coords, tile, done, retryCount: retryCount + 1 });
-                        activeRequests--;
-                        processQueue();
-                    }, delay);
-                } else {
-                    logger.logTileFailed(url, status);
-                    tile.src = TRANSPARENT_TILE;
-                    done(undefined, tile);
-                    activeRequests--;
-                    processQueue();
-                }
-            });
-    };
+    fetch(url)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            return response.blob();
+        })
+        .then(blob => {
+            tile.src = URL.createObjectURL(blob);
+            logger.logTileSuccess();
+            done(undefined, tile);
+            activeRequests--;
+            processQueue();
+        })
+        .catch((error: any) => {
+            // Retry yoxdur - birbaşa transparent tile göstər
+            logger.logTileFailed(url, 0);
+            tile.src = TRANSPARENT_TILE;
+            done(undefined, tile);
+            activeRequests--;
+            processQueue();
+        });
+};
 
     const QueuedTileLayerClass = L.TileLayer.extend({
         createTile: function(this: L.TileLayer, coords: L.Coords, done: L.DoneCallback): HTMLImageElement {
@@ -364,13 +341,20 @@ const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }
                 }
 
                 // Yeni layer
-                const layer = createQueuedTileLayer(tileUrl, {
-                    opacity,
-                    maxZoom: info.maxzoom || 22,
-                    minZoom: info.minzoom || 0,
-                    tileSize: 256,
-                    crossOrigin: 'anonymous',
-                });
+                const [minLng, minLat, maxLng, maxLat] = stacBbox;
+const layer = createQueuedTileLayer(tileUrl, {
+    opacity,
+    maxZoom: info.maxzoom || 18,
+    minZoom: info.minzoom || 0,
+    tileSize: 256,
+    crossOrigin: 'anonymous',
+    bounds: L.latLngBounds(
+        [minLat, minLng],  // Southwest
+        [maxLat, maxLng]   // Northeast
+    ),
+    zIndex: 1000,  // ✅ Yüksək z-index
+    pane: 'overlayPane',  // ✅ Overlay pane-də göstər
+});
 
                 layer.on('load', () => {
                     console.log('✅ Layer loaded');
@@ -382,15 +366,20 @@ const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }
 
                 // Fit bounds - STAC item bbox-dan
                 // STAC bbox format: [minLng, minLat, maxLng, maxLat]
-                if (stacBbox && stacBbox.length === 4) {
-                    const [minLng, minLat, maxLng, maxLat] = stacBbox;
-                    const leafletBounds: L.LatLngBoundsExpression = [
-                        [minLat, minLng],  // SW corner
-                        [maxLat, maxLng]   // NE corner
-                    ];
-                    console.log('🗺️ Fitting to bounds:', leafletBounds);
-                    map.fitBounds(leafletBounds, { padding: [50, 50], maxZoom: 16 });
-                }
+               if (stacBbox && stacBbox.length === 4) {
+    const [minLng, minLat, maxLng, maxLat] = stacBbox;
+    const leafletBounds: L.LatLngBoundsExpression = [
+        [minLat, minLng],
+        [maxLat, maxLng]
+    ];
+    console.log('🗺️ Fitting to bounds:', leafletBounds);
+    map.fitBounds(leafletBounds, { padding: [50, 50], maxZoom: 12 });  // ← 16-dan 12-yə
+    setTimeout(() => {
+    const center = map.getCenter();
+    const zoom = map.getZoom();
+    console.log('🎯 Map center after fitBounds:', center.lat, center.lng, 'zoom:', zoom);
+}, 500);
+}
 
                 setLoading(false);
                 console.log('%c✅ RASTER LAYER READY', 'color: #10b981; font-weight: bold; font-size: 14px;');
