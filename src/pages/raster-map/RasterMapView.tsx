@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons';
 import type { BboxCoords, StacItem } from '../../types/raster.map.type';
 import VectorPointsLayer from '../../components/map/VectorPointsLayer';
+import RasterTileLayer from '../../components/map/RasterTileLayer';  // ✅ ƏLAVƏ EDİLDİ
 import dayjs from 'dayjs';
 import 'leaflet/dist/leaflet.css';
 
@@ -394,6 +395,10 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
     const [isFullscreen, setIsFullscreen] = useState(false);
     // ✅ YENİ: Vector points state
     const [showVectorPoints, setShowVectorPoints] = useState(false);
+    // ✅ YENİ: Raster tile layer visibility
+    const [showRasterTiles, setShowRasterTiles] = useState(true);
+    // ✅ YENİ: Raster loading state
+    const [rasterLoading, setRasterLoading] = useState(false);
 
     const toggleFullscreen = useCallback(() => {
         if (!document.fullscreenElement) {
@@ -416,6 +421,12 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isDrawingBbox, onCancelDraw]);
+
+    // ✅ Seçilmiş item raster tipindədirsə yoxla
+    const isRasterItem = selectedItem?.properties?.data_type === 'raster' || 
+                         Object.values(selectedItem?.assets || {}).some(
+                             (asset: any) => asset.type?.includes('geotiff')
+                         );
 
     return (
         <div style={{ 
@@ -499,6 +510,27 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
                 </Tooltip>
             </div>
 
+            {/* ✅ YENİ: Raster Loading Indicator */}
+            {rasterLoading && (
+                <div style={{
+                    position: 'absolute',
+                    top: 60,
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    zIndex: 1000,
+                    background: 'rgba(255,255,255,0.95)',
+                    padding: '12px 20px',
+                    borderRadius: 8,
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10
+                }}>
+                    <LoadingOutlined spin style={{ color: '#1677ff', fontSize: 18 }} />
+                    <Text strong>Raster xəritəyə yüklənir...</Text>
+                </div>
+            )}
+
             {/* Loading Indicator */}
             {loading && (
                 <div style={{
@@ -574,6 +606,11 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
                     <Text type="secondary" style={{ fontSize: 11 }}>
                         {dayjs(selectedItem.properties.datetime).format('DD.MM.YYYY HH:mm')}
                     </Text>
+                    {isRasterItem && (
+                        <div style={{ marginTop: 4 }}>
+                            <Tag color="blue" style={{ fontSize: 10 }}>COG Yüklənir</Tag>
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -653,6 +690,14 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
                         onSelect={() => onItemSelect(item)}
                     />
                 ))}
+
+                {/* ✅ YENİ: Raster Tile Layer - seçilmiş item üçün */}
+                {selectedItem && showRasterTiles && isRasterItem && (
+                    <RasterTileLayer
+                        item={selectedItem}
+                        opacity={0.85}
+                    />
+                )}
 
                 {/* ✅ YENİ: Vector Points Layer */}
                 <VectorPointsLayer

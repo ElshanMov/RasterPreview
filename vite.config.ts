@@ -25,6 +25,18 @@ export default defineConfig({
             console.log('📥 Proxy Response:', proxyRes.statusCode, req.url);
           });
         }
+      },
+      // ✅ TiTiler proxy - CORS problemini həll edir
+      '/titiler-api': {
+        target: 'https://tiles.mmdev.az',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/titiler-api/, ''),
+        configure: (proxy, _options) => {
+          proxy.on('error', (err, _req, _res) => {
+            console.log('TiTiler proxy error', err);
+          });
+        }
       }
     }
   }

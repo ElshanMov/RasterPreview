@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Layout, Typography, App } from 'antd';
 import RasterMapSidebar from './RasterMapSidebar';
 import RasterMapView from './RasterMapView';
@@ -13,17 +13,16 @@ import type {
 const { Header } = Layout;
 const { Title } = Typography;
 
-// ✅ dataType: 'all' əlavə edildi
 const defaultFilters: RasterFilterParams = {
     bbox: null,
     dateRange: null,
     collections: [],
     ids: '',
     searchText: '',
-    dataType: 'all',  // ✅ YENİ
+    dataType: 'all',
     cloudCover: null,
     resolution: null,
-    limit: 10,
+    limit: 50,
     sortBy: { field: 'datetime', direction: 'desc' },
     token: null
 };
@@ -47,6 +46,9 @@ export default function RasterMapPage() {
     // Stats
     const [totalMatched, setTotalMatched] = useState(0);
 
+    // Debounce ref for auto search
+    const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
     // Fetch collections on mount
     useEffect(() => {
         const fetchCollections = async () => {
@@ -67,19 +69,19 @@ export default function RasterMapPage() {
         setFilters(prev => ({ ...prev, ...newFilters }));
     }, []);
 
-    const handleBboxDrawn = useCallback((bbox: BboxCoords) => {
-        setFilters(prev => ({ ...prev, bbox }));
-        setIsDrawingBbox(false);
-        message.success('Ərazi seçildi');
-    }, []);
+    // Search function
+    const performSearch = useCallback(async (searchFilters: RasterFilterParams) => {
+        // Bbox olmadan axtarış etmə
+        if (!searchFilters.bbox) {
+            return;
+        }
 
-    const handleSearch = useCallback(async () => {
         setLoading(true);
         setSelectedItem(null);
         
         try {
-            // Smart search - avtomatik GET/POST seçir
-            const response = await StacService.search(filters);
+            console.log('🔍 Searching with filters:', searchFilters);
+            const response = await StacService.search(searchFilters);
             
             setResults(response.features);
             setTotalMatched(response.numberMatched || response.features.length);
@@ -95,7 +97,32 @@ export default function RasterMapPage() {
         } finally {
             setLoading(false);
         }
-    }, [filters]);
+    }, []);
+
+    // Handle bbox drawn - avtomatik axtarış
+    const handleBboxDrawn = useCallback((bbox: BboxCoords) => {
+        console.log('📍 Bbox drawn:', bbox);
+        
+        const newFilters = { ...filters, bbox };
+        setFilters(newFilters);
+        setIsDrawingBbox(false);
+        
+        message.success('Ərazi seçildi, axtarış başladılır...');
+        
+        // Avtomatik axtarış - kiçik delay ilə
+        if (searchTimeoutRef.current) {
+            clearTimeout(searchTimeoutRef.current);
+        }
+        
+        searchTimeoutRef.current = setTimeout(() => {
+            performSearch(newFilters);
+        }, 300);
+    }, [filters, performSearch]);
+
+    // Manual search button
+    const handleSearch = useCallback(async () => {
+        await performSearch(filters);
+    }, [filters, performSearch]);
 
     const handleClearFilters = useCallback(() => {
         setFilters(defaultFilters);
@@ -105,11 +132,26 @@ export default function RasterMapPage() {
     }, []);
 
     const handleItemSelect = useCallback((item: StacItem) => {
+        console.log('📄 Item selected:', item.id, item.properties.data_type);
         setSelectedItem(item);
+        
+        // Raster seçildiyində mesaj göstər
+        if (item.properties.data_type === 'raster') {
+            message.info('Raster xəritəyə yüklənir...');
+        }
     }, []);
 
     const handleCancelDraw = useCallback(() => {
         setIsDrawingBbox(false);
+    }, []);
+
+    // Cleanup timeout on unmount
+    useEffect(() => {
+        return () => {
+            if (searchTimeoutRef.current) {
+                clearTimeout(searchTimeoutRef.current);
+            }
+        };
     }, []);
 
     return (
@@ -125,7 +167,7 @@ export default function RasterMapPage() {
                 justifyContent: 'space-between'
             }}>
                 <Title level={4} style={{ margin: 0 }}>
-                    🗺️ Raster Map Explorer
+                    🗺️ Raster & Vector Explorer
                 </Title>
             </Header>
 
@@ -171,6 +213,7 @@ export default function RasterMapPage() {
                         onItemSelect={handleItemSelect}
                         collapsed={collapsed}
                         onToggleSidebar={() => setCollapsed(!collapsed)}
+                        loading={loading}
                     />
                 </Layout.Content>
             </Layout>

@@ -124,15 +124,15 @@ export default function RasterUploader() {
             };
 
             const presignedResponse = await FileService.getRasterFilePresignedUrl(requestBody);
+debugger
 
-
-            const presignedUrl = presignedResponse.data.url;
+            const presignedUrl = presignedResponse.data;
 
             // Upload to MinIO with progress
             setUploadStatus('MinIO-ya yüklənir...');
             message.loading({ content: 'MinIO-ya yüklənir... 0%', key: 'upload' });
 
-            await MinIOService.uploadRaster(presignedUrl, currentFile, (percent) => {
+            await MinIOService.uploadRaster(presignedUrl.url, currentFile, (percent) => {
                 setUploadProgress(percent);
                 message.loading({
                     content: `MinIO-ya yüklənir... ${percent}%`,
@@ -200,13 +200,12 @@ export default function RasterUploader() {
                 },
                 assets: {
                     "data": {  // ✅ Generic key instead of filename
-                        href: presignedUrl,  // ✅ S3 path from backend
+                        href: presignedUrl.path,  // ✅ S3 path from backend
                         type: "image/tiff; application=geotiff; profile=cloud-optimized",
                         title: currentFile.name,
                         roles: ["data"]
                     }
-                },
-                links: []
+                }
             };
 
 

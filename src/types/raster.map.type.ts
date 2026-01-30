@@ -2,7 +2,7 @@
 // STAC Search API - GET & POST Types
 // ==========================================
 
-// ✅ YENİ: Data Type - Raster və ya Vector seçimi üçün
+// ✅ Data Type - Raster və ya Vector seçimi üçün
 export type DataType = 'all' | 'raster' | 'vector';
 
 export interface BboxCoords {
@@ -76,7 +76,7 @@ export interface RasterFilterParams {
     ids: string;
     searchText: string;
     
-    // ✅ YENİ: Data Type filter
+    // Data Type filter
     dataType: DataType;
     
     // Advanced filters
@@ -115,7 +115,7 @@ export interface StacItemProperties {
     'eo:cloud_cover'?: number;
     'proj:epsg'?: number;
     'gsd'?: number;
-    // ✅ YENİ: Backend-dən gələcək data_type
+    // Backend-dən gələcək data_type
     data_type?: 'raster' | 'vector';
     // Vector-specific properties
     feature_count?: number;
@@ -132,11 +132,16 @@ export interface StacLink {
 }
 
 export interface StacAsset {
-    href: string;
+    // Backend həm kiçik həm böyük hərflə qaytara bilər
+    href?: string;
+    Href?: string;
     type?: string;
+    Type?: string;
     title?: string;
+    Title?: string;
     description?: string;
     roles?: string[];
+    Roles?: string[];
 }
 
 // ==========================================
@@ -177,4 +182,29 @@ export interface StacCollection {
         };
     };
     links: StacLink[];
+}
+
+// ==========================================
+// TiTiler Integration Types
+// ==========================================
+
+export interface RasterTileConfig {
+    cogUrl: string;
+    tileUrl: string;
+    bounds: [number, number, number, number];
+    statistics?: {
+        [bandKey: string]: {
+            min: number;
+            max: number;
+            percentile_2: number;
+            percentile_98: number;
+        };
+    };
+}
+
+export interface SelectedRasterLayer {
+    item: StacItem;
+    tileConfig: RasterTileConfig | null;
+    loading: boolean;
+    error: string | null;
 }

@@ -8,10 +8,10 @@ import type {
     RasterFilterParams
 } from '../types/raster.map.type';
 
-// ✅ STAC API - Vite proxy vasitəsilə
+// STAC API - Vite proxy vasitəsilə
 const STAC_API_URL = '/stac-api';
 
-// ✅ STAC üçün ayrıca axios instance (token lazım deyil)
+// STAC üçün ayrıca axios instance (token lazım deyil)
 const stacAxios = axios.create({
     baseURL: STAC_API_URL,
     headers: {
@@ -55,23 +55,8 @@ export const buildGetParams = (filters: RasterFilterParams): StacSearchGetParams
 
     params.limit = filters.limit;
 
-    // Query as JSON string
-    const query: Record<string, any> = {};
-    
-    // ✅ Data type filter
-    if (filters.dataType && filters.dataType !== 'all') {
-        query['data_type'] = { eq: filters.dataType };
-    }
-    
-    if (filters.cloudCover !== null) {
-        query['eo:cloud_cover'] = { lte: filters.cloudCover };
-    }
-    if (filters.resolution) {
-        query['gsd'] = { gte: filters.resolution[0], lte: filters.resolution[1] };
-    }
-    if (Object.keys(query).length > 0) {
-        params.query = JSON.stringify(query);
-    }
+    // GET request-də CQL2 filter dəstəklənmir, ona görə
+    // dataType, cloudCover, resolution filterləri yalnız POST-da işləyir
 
     // Sortby as JSON string
     if (filters.sortBy) {
@@ -83,6 +68,69 @@ export const buildGetParams = (filters: RasterFilterParams): StacSearchGetParams
     }
 
     return params;
+};
+
+/**
+ * CQL2-JSON filter yaratmaq
+ */
+const buildCql2Filter = (filters: RasterFilterParams): Record<string, any> | null => {
+    const conditions: Record<string, any>[] = [];
+
+    // Data type filter
+    if (filters.dataType && filters.dataType !== 'all') {
+        conditions.push({
+            op: '=',
+            args: [
+                { property: 'properties.data_type' },
+                filters.dataType
+            ]
+        });
+    }
+
+    // Cloud cover filter
+    if (filters.cloudCover !== null && filters.cloudCover < 100) {
+        conditions.push({
+            op: '<=',
+            args: [
+                { property: 'properties.eo:cloud_cover' },
+                filters.cloudCover
+            ]
+        });
+    }
+
+    // Resolution (GSD) filter
+    if (filters.resolution) {
+        conditions.push({
+            op: '>=',
+            args: [
+                { property: 'properties.gsd' },
+                filters.resolution[0]
+            ]
+        });
+        conditions.push({
+            op: '<=',
+            args: [
+                { property: 'properties.gsd' },
+                filters.resolution[1]
+            ]
+        });
+    }
+
+    // Heç bir condition yoxdursa null qaytar
+    if (conditions.length === 0) {
+        return null;
+    }
+
+    // Tək condition varsa birbaşa qaytar
+    if (conditions.length === 1) {
+        return conditions[0];
+    }
+
+    // Çoxlu condition varsa AND ilə birləşdir
+    return {
+        op: 'and',
+        args: conditions
+    };
 };
 
 /**
@@ -114,22 +162,11 @@ export const buildPostBody = (filters: RasterFilterParams): StacSearchPostReques
 
     body.limit = filters.limit;
 
-    // Query object
-    const query: Record<string, any> = {};
-    
-    // ✅ Data type filter
-    if (filters.dataType && filters.dataType !== 'all') {
-        query['data_type'] = { eq: filters.dataType };
-    }
-    
-    if (filters.cloudCover !== null) {
-        query['eo:cloud_cover'] = { lte: filters.cloudCover };
-    }
-    if (filters.resolution) {
-        query['gsd'] = { gte: filters.resolution[0], lte: filters.resolution[1] };
-    }
-    if (Object.keys(query).length > 0) {
-        body.query = query;
+    // CQL2-JSON filter
+    const cql2Filter = buildCql2Filter(filters);
+    if (cql2Filter) {
+        (body as any)['filter-lang'] = 'cql2-json';
+        (body as any)['filter'] = cql2Filter;
     }
 
     // Sortby array
@@ -146,16 +183,16 @@ export const buildPostBody = (filters: RasterFilterParams): StacSearchPostReques
 
 /**
  * Filterin mürəkkəbliyinə görə GET və ya POST seçilməsini təyin edir
+ * CQL2-JSON filter yalnız POST ilə işləyir
  */
 export const shouldUsePost = (filters: RasterFilterParams): boolean => {
+    // CQL2-JSON filter istifadə edilirsə - POST
+    if (filters.dataType && filters.dataType !== 'all') return true;
+    if (filters.cloudCover !== null && filters.cloudCover < 100) return true;
+    if (filters.resolution !== null) return true;
+    
     // Geo filterlər varsa POST istifadə et
     if (filters.bbox) return true;
-    
-    // Mürəkkəb query varsa POST istifadə et
-    if (filters.cloudCover !== null || filters.resolution !== null) return true;
-    
-    // ✅ Data type filter varsa POST istifadə et
-    if (filters.dataType && filters.dataType !== 'all') return true;
     
     // Çoxlu collection varsa POST istifadə et
     if (filters.collections.length > 3) return true;
