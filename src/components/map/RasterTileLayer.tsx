@@ -3,9 +3,11 @@
  * 
  * TiTiler-dən COG tile-ları yükləyir.
  * 
- * ⚠️ DEVOPS DİAGNOSTİC:
- * Bu komponent S3 connection problemlərini console-da göstərir.
- * "🔴 S3_TIMEOUT" mesajları TiTiler → S3 bağlantı problemini göstərir.
+ * ⚠️ PERFORMANCE MONITORING:
+ * Console-da API sorğularının vaxtını göstərir:
+ * - 🕐 INFO_TIME: TiTiler /info endpoint
+ * - 🕐 STATS_TIME: TiTiler /statistics endpoint  
+ * - 🕐 TOTAL_SETUP_TIME: Ümumi setup vaxtı
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -35,42 +37,94 @@ interface QueuedTile {
 // ============================================================================
 
 const MAX_CONCURRENT_REQUESTS = 4;
-const MAX_RETRIES = 3;
-const RETRY_DELAYS = [500, 1000, 2000];
 const TRANSPARENT_TILE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
 // ============================================================================
-// COG URL Extractor - Ən vacib funksiya!
+// Performance Timer
+// ============================================================================
+
+class PerformanceTimer {
+    private timers: Map<string, number> = new Map();
+    private results: Map<string, number> = new Map();
+
+    start(label: string) {
+        this.timers.set(label, performance.now());
+    }
+
+    end(label: string): number {
+        const startTime = this.timers.get(label);
+        if (!startTime) return 0;
+        
+        const duration = performance.now() - startTime;
+        this.results.set(label, duration);
+        this.timers.delete(label);
+        return duration;
+    }
+
+    log(label: string, emoji: string = '🕐') {
+        const duration = this.results.get(label);
+        if (duration !== undefined) {
+            const color = duration > 2000 ? '#ef4444' : duration > 1000 ? '#f59e0b' : '#10b981';
+            console.log(
+                `%c${emoji} ${label}: ${duration.toFixed(0)}ms`,
+                `color: ${color}; font-weight: bold;`
+            );
+        }
+    }
+
+    printSummary() {
+        console.log('%c📊 PERFORMANCE SUMMARY:', 'color: #6366f1; font-weight: bold; font-size: 14px;');
+        this.results.forEach((duration, label) => {
+            const color = duration > 2000 ? '#ef4444' : duration > 1000 ? '#f59e0b' : '#10b981';
+            console.log(`   %c${label}: ${duration.toFixed(0)}ms`, `color: ${color};`);
+        });
+        
+        // Backend-çilər üçün xülasə
+        const infoTime = this.results.get('INFO_API') || 0;
+        const statsTime = this.results.get('STATISTICS_API') || 0;
+        const totalSetup = this.results.get('TOTAL_SETUP') || 0;
+        
+        if (infoTime > 2000 || statsTime > 2000) {
+            console.log(
+                '%c⚠️ BACKEND YAVAŞLIĞI AŞKARLANDI!',
+                'color: #ef4444; font-weight: bold; font-size: 14px;'
+            );
+            if (infoTime > 2000) {
+                console.log(`   TiTiler /info endpoint: ${infoTime.toFixed(0)}ms (>2s)`);
+            }
+            if (statsTime > 2000) {
+                console.log(`   TiTiler /statistics endpoint: ${statsTime.toFixed(0)}ms (>2s)`);
+            }
+        }
+        
+        console.log(`%c📦 Total setup time: ${totalSetup.toFixed(0)}ms`, 'color: #6366f1; font-weight: bold;');
+    }
+
+    reset() {
+        this.timers.clear();
+        this.results.clear();
+    }
+}
+
+// ============================================================================
+// COG URL Extractor
 // ============================================================================
 
 function extractCogUrl(item: StacItem): string | null {
-    console.log('%c🔍 COG URL EXTRACTION', 'color: #8b5cf6; font-weight: bold;');
-    console.log('   Item ID:', item.id);
-    console.log('   Collection:', item.collection);
-    console.log('   Assets:', item.assets);
-
     // 1. Assets-dən axtar
     if (item.assets && typeof item.assets === 'object') {
-        const assetEntries = Object.entries(item.assets);
-        console.log('   Asset keys:', Object.keys(item.assets));
-
-        for (const [key, value] of assetEntries) {
+        for (const [key, value] of Object.entries(item.assets)) {
             const asset = value as any;
             
-            // ✅ PascalCase VƏ camelCase dəstəyi!
-            // Backend "Href" qaytarır, standart STAC "href" istifadə edir
+            // PascalCase VƏ camelCase dəstəyi
             let href = asset?.href || asset?.Href || asset?.url || asset?.URL;
             let type = asset?.type || asset?.Type || '';
             
-            // Əgər asset birbaşa string-dirsə
             if (typeof asset === 'string') {
                 href = asset;
             }
 
-            console.log(`   Checking asset["${key}"]:`, { href, type });
-
             if (href && typeof href === 'string') {
-                // COG/TIFF URL-lərini qəbul et
                 const isCogLike = 
                     href.endsWith('.tif') ||
                     href.endsWith('.tiff') ||
@@ -85,14 +139,12 @@ function extractCogUrl(item: StacItem): string | null {
                         type.includes('cloud-optimized')
                     ));
 
-                // STAC API URL-lərini rədd et
                 const isStacApiUrl = 
                     href.includes('/collections/') ||
                     href.includes('/items/') ||
                     href.includes('/search');
 
                 if (isCogLike || (!isStacApiUrl && key === 'data')) {
-                    console.log(`   ✅ Found COG URL in asset["${key}"]:`, href);
                     return href;
                 }
             }
@@ -111,7 +163,6 @@ function extractCogUrl(item: StacItem): string | null {
                     href.endsWith('.tif') ||
                     href.startsWith('s3://')
                 ) {
-                    console.log('   ✅ Found COG URL in links:', href);
                     return href;
                 }
             }
@@ -125,13 +176,11 @@ function extractCogUrl(item: StacItem): string | null {
         
         for (const field of urlFields) {
             if (props[field] && typeof props[field] === 'string') {
-                console.log(`   ✅ Found COG URL in properties.${field}:`, props[field]);
                 return props[field];
             }
         }
     }
 
-    console.log('   ❌ No COG URL found');
     return null;
 }
 
@@ -140,46 +189,21 @@ function extractCogUrl(item: StacItem): string | null {
 // ============================================================================
 
 class DiagnosticLogger {
-    private stats = { total: 0, loaded: 0, failed: 0, retried: 0, s3Timeouts: 0 };
-    private sessionStart = Date.now();
+    private stats = { total: 0, loaded: 0, failed: 0 };
 
     reset() {
-        this.stats = { total: 0, loaded: 0, failed: 0, retried: 0, s3Timeouts: 0 };
-        this.sessionStart = Date.now();
+        this.stats = { total: 0, loaded: 0, failed: 0 };
     }
 
     logTileRequest() { this.stats.total++; }
     logTileSuccess() { this.stats.loaded++; }
-    
-    logTileRetry(url: string, attempt: number) {
-        this.stats.retried++;
-        console.warn(`🔄 TILE_RETRY [${attempt}/${MAX_RETRIES}]`, url.substring(0, 80));
-    }
-
-    logS3Timeout(url: string, errorDetail: string) {
-        this.stats.s3Timeouts++;
-        console.error(
-            '%c🔴 S3_TIMEOUT - TiTiler S3-ə qoşula bilmir!',
-            'color: #ef4444; font-weight: bold; font-size: 14px;',
-            '\n\nError:', errorDetail,
-            '\n\n⚠️ DEVOPS HƏLL:',
-            '\n   • GDAL_HTTP_TIMEOUT=60',
-            '\n   • GDAL_HTTP_MAX_RETRY=5'
-        );
-    }
-
-    logTileFailed(url: string, status: number) {
-        this.stats.failed++;
-        console.warn(`⚠️ TILE_FAILED [${status}]`, url.substring(0, 60));
-    }
+    logTileFailed() { this.stats.failed++; }
 
     printSummary() {
-        const duration = ((Date.now() - this.sessionStart) / 1000).toFixed(1);
         const rate = this.stats.total > 0 ? ((this.stats.loaded / this.stats.total) * 100).toFixed(0) : '0';
-        
         console.log(
-            `%c📊 TILES: ${this.stats.loaded}/${this.stats.total} (${rate}%) in ${duration}s | Failed: ${this.stats.failed} | S3 Timeouts: ${this.stats.s3Timeouts}`,
-            this.stats.s3Timeouts > 0 ? 'color: #ef4444; font-weight: bold;' : 'color: #10b981;'
+            `%c🖼️ TILES: ${this.stats.loaded}/${this.stats.total} (${rate}%) | Failed: ${this.stats.failed}`,
+            this.stats.failed > 0 ? 'color: #f59e0b;' : 'color: #10b981;'
         );
     }
 }
@@ -187,7 +211,7 @@ class DiagnosticLogger {
 const logger = new DiagnosticLogger();
 
 // ============================================================================
-// Custom TileLayer with Queue and Retry
+// Custom TileLayer with Queue
 // ============================================================================
 
 const createQueuedTileLayer = (tileUrl: string, options: L.TileLayerOptions = {}) => {
@@ -205,37 +229,36 @@ const createQueuedTileLayer = (tileUrl: string, options: L.TileLayerOptions = {}
     };
 
     const loadTile = (item: QueuedTile) => {
-    const { coords, tile, done } = item;
-    const url = tileUrl
-        .replace('{z}', String(coords.z))
-        .replace('{x}', String(coords.x))
-        .replace('{y}', String(coords.y));
+        const { coords, tile, done } = item;
+        const url = tileUrl
+            .replace('{z}', String(coords.z))
+            .replace('{x}', String(coords.x))
+            .replace('{y}', String(coords.y));
 
-    logger.logTileRequest();
+        logger.logTileRequest();
 
-    fetch(url)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-            return response.blob();
-        })
-        .then(blob => {
-            tile.src = URL.createObjectURL(blob);
-            logger.logTileSuccess();
-            done(undefined, tile);
-            activeRequests--;
-            processQueue();
-        })
-        .catch((error: any) => {
-            // Retry yoxdur - birbaşa transparent tile göstər
-            logger.logTileFailed(url, 0);
-            tile.src = TRANSPARENT_TILE;
-            done(undefined, tile);
-            activeRequests--;
-            processQueue();
-        });
-};
+        fetch(url)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                return response.blob();
+            })
+            .then(blob => {
+                tile.src = URL.createObjectURL(blob);
+                logger.logTileSuccess();
+                done(undefined, tile);
+                activeRequests--;
+                processQueue();
+            })
+            .catch(() => {
+                logger.logTileFailed();
+                tile.src = TRANSPARENT_TILE;
+                done(undefined, tile);
+                activeRequests--;
+                processQueue();
+            });
+    };
 
     const QueuedTileLayerClass = L.TileLayer.extend({
         createTile: function(this: L.TileLayer, coords: L.Coords, done: L.DoneCallback): HTMLImageElement {
@@ -260,6 +283,7 @@ const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }
     const layerRef = useRef<L.TileLayer | null>(null);
     const [, setLoading] = useState(true);
     const [, setError] = useState<string | null>(null);
+    const timerRef = useRef(new PerformanceTimer());
 
     useEffect(() => {
         if (!item) return;
@@ -268,6 +292,10 @@ const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }
             setLoading(true);
             setError(null);
             logger.reset();
+            timerRef.current.reset();
+
+            // Total setup timer başla
+            timerRef.current.start('TOTAL_SETUP');
 
             console.log(
                 '%c🗺️ RASTER LAYER LOADING',
@@ -276,55 +304,79 @@ const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }
             );
 
             try {
-                // ✅ COG URL-ni tap
+                // COG URL extraction timer
+                timerRef.current.start('COG_URL_EXTRACTION');
                 const cogUrl = extractCogUrl(item);
+                timerRef.current.end('COG_URL_EXTRACTION');
 
                 if (!cogUrl) {
-                    throw new Error(
-                        `COG URL tapılmadı!\n` +
-                        `Item ID: ${item.id}\n` +
-                        `Assets: ${JSON.stringify(item.assets, null, 2)}`
-                    );
+                    throw new Error(`COG URL tapılmadı! Item ID: ${item.id}`);
                 }
 
-                // ✅ STAC API URL yoxlaması
                 if (cogUrl.includes('/collections/') || cogUrl.includes('/items/')) {
                     throw new Error(`Bu STAC metadata URL-dir, COG fayl deyil: ${cogUrl}`);
                 }
 
-                console.log('%c📦 COG URL:', 'color: #10b981; font-weight: bold;', cogUrl);
+                console.log('%c📦 COG URL:', 'color: #10b981;', cogUrl);
 
-                // TiTiler-dən metadata al
-                console.log('📊 TiTiler-dən metadata alınır...');
+                // ==========================================
+                // TiTiler API Sorğuları - VAXT ÖLÇÜMÜ
+                // ==========================================
                 
-                // ✅ STAC item-dən bbox istifadə edirik (TiTiler /bounds 500 qaytarır)
-                const stacBbox = item.bbox; // [minLng, minLat, maxLng, maxLat]
-                console.log('📍 STAC bbox:', stacBbox);
-                
-                const [info, statistics] = await Promise.all([
-                    TitilerService.getInfo(cogUrl),
-                    TitilerService.getStatistics(cogUrl).catch(e => {
-                        console.warn('Statistics alınmadı:', e.message);
-                        return null;
-                    })
-                ]);
+                // INFO API timer
+                timerRef.current.start('INFO_API');
+                console.log('📊 TiTiler /info sorğusu başladı...');
+                const info = await TitilerService.getInfo(cogUrl);
+                const infoTime = timerRef.current.end('INFO_API');
+                timerRef.current.log('INFO_API', '📊');
 
-                console.log('✅ TiTiler metadata alındı:', {
-                    bands: info.count,
-                    size: `${info.width}x${info.height}`,
-                    stacBbox
-                });
+                // ⚡ OPTIMIZATION: Statistics skip edilir - dtype-dan rescale hesablanır
+                // Statistics API 4-32 saniyə çəkirdi, indi 0ms
+                timerRef.current.start('RESCALE_CALC');
+                
+                // dtype-a görə rescale təyin et
+                const dtype = info.dtype || 'uint8';
+                let defaultRescale: string;
+                
+                if (dtype.includes('uint8') || dtype.includes('int8')) {
+                    defaultRescale = '0,255';
+                } else if (dtype.includes('uint16') || dtype.includes('int16')) {
+                    // Satellite imagery üçün tipik dəyərlər
+                    defaultRescale = '0,3000';
+                } else if (dtype.includes('float')) {
+                    defaultRescale = '0,1';
+                } else {
+                    defaultRescale = '0,255';
+                }
+                
+                console.log(
+                    `%c⚡ Statistics SKIP edildi - dtype: ${dtype} → rescale: ${defaultRescale}`,
+                    'color: #10b981; font-weight: bold;'
+                );
+                
+                timerRef.current.end('RESCALE_CALC');
+
+                // ==========================================
+                // API sorğuları bitdi - nəticələri göstər
+                // ==========================================
+                
+                console.log(
+                    '%c✅ TiTiler API sorğuları tamamlandı',
+                    'color: #10b981; font-weight: bold;',
+                    `\n   /info: ${infoTime.toFixed(0)}ms`,
+                    `\n   /statistics: SKIP (dtype-based) ⚡`,
+                    `\n   Total API: ${infoTime.toFixed(0)}ms`
+                );
+
+                // STAC bbox istifadə et
+                const stacBbox = item.bbox;
 
                 // Band indexes
+                timerRef.current.start('TILE_URL_BUILD');
                 const bidx = TitilerService.getBandIndexes(info);
-                console.log('🎨 Bands:', bidx);
 
-                // Rescale
-                let rescale: string[] = ['0,255'];
-                if (statistics) {
-                    rescale = TitilerService.calculateRescale(statistics, bidx.length);
-                }
-                console.log('📊 Rescale:', rescale);
+                // Rescale - dtype-a görə
+                const rescale: string[] = bidx.map(() => defaultRescale);
 
                 // Tile URL
                 const tileUrl = TitilerService.buildTileUrl(cogUrl, {
@@ -332,61 +384,65 @@ const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }
                     bidx,
                     rescale,
                 });
-                
-                console.log('%c🔗 Tile URL:', 'color: #3b82f6; font-weight: bold;', tileUrl.replace('{z}/{x}/{y}', '...'));
+                timerRef.current.end('TILE_URL_BUILD');
 
                 // Köhnə layer-i sil
                 if (layerRef.current) {
                     map.removeLayer(layerRef.current);
                 }
 
-                // Yeni layer
+                // Layer yaratma timer
+                timerRef.current.start('LAYER_CREATE');
                 const [minLng, minLat, maxLng, maxLat] = stacBbox;
-const layer = createQueuedTileLayer(tileUrl, {
-    opacity,
-    maxZoom: info.maxzoom || 18,
-    minZoom: info.minzoom || 0,
-    tileSize: 256,
-    crossOrigin: 'anonymous',
-    bounds: L.latLngBounds(
-        [minLat, minLng],  // Southwest
-        [maxLat, maxLng]   // Northeast
-    ),
-    zIndex: 1000,  // ✅ Yüksək z-index
-    pane: 'overlayPane',  // ✅ Overlay pane-də göstər
-});
+                const layer = createQueuedTileLayer(tileUrl, {
+                    opacity,
+                    maxZoom: info.maxzoom || 18,
+                    minZoom: info.minzoom || 0,
+                    tileSize: 256,
+                    crossOrigin: 'anonymous',
+                    bounds: L.latLngBounds(
+                        [minLat, minLng],
+                        [maxLat, maxLng]
+                    ),
+                    zIndex: 1000,
+                    pane: 'overlayPane',
+                });
 
                 layer.on('load', () => {
-                    console.log('✅ Layer loaded');
+                    console.log('✅ Layer tiles loaded');
                     logger.printSummary();
                 });
 
                 layer.addTo(map);
                 layerRef.current = layer;
+                timerRef.current.end('LAYER_CREATE');
 
-                // Fit bounds - STAC item bbox-dan
-                // STAC bbox format: [minLng, minLat, maxLng, maxLat]
-               if (stacBbox && stacBbox.length === 4) {
-    const [minLng, minLat, maxLng, maxLat] = stacBbox;
-    const leafletBounds: L.LatLngBoundsExpression = [
-        [minLat, minLng],
-        [maxLat, maxLng]
-    ];
-    console.log('🗺️ Fitting to bounds:', leafletBounds);
-    map.fitBounds(leafletBounds, { padding: [50, 50], maxZoom: 12 });  // ← 16-dan 12-yə
-    setTimeout(() => {
-    const center = map.getCenter();
-    const zoom = map.getZoom();
-    console.log('🎯 Map center after fitBounds:', center.lat, center.lng, 'zoom:', zoom);
-}, 500);
-}
+                // Fit bounds
+                timerRef.current.start('FIT_BOUNDS');
+                if (stacBbox && stacBbox.length === 4) {
+                    const leafletBounds: L.LatLngBoundsExpression = [
+                        [minLat, minLng],
+                        [maxLat, maxLng]
+                    ];
+                    map.fitBounds(leafletBounds, { padding: [50, 50], maxZoom: 12 });
+                }
+                timerRef.current.end('FIT_BOUNDS');
 
+                // Total setup bitdi
+                timerRef.current.end('TOTAL_SETUP');
+                
                 setLoading(false);
-                console.log('%c✅ RASTER LAYER READY', 'color: #10b981; font-weight: bold; font-size: 14px;');
+                
+                // ==========================================
+                // PERFORMANCE SUMMARY - Backend üçün
+                // ==========================================
+                console.log('%c' + '═'.repeat(50), 'color: #6366f1;');
+                timerRef.current.printSummary();
+                console.log('%c' + '═'.repeat(50), 'color: #6366f1;');
 
             } catch (err: any) {
+                timerRef.current.end('TOTAL_SETUP');
                 console.error('%c❌ LAYER ERROR:', 'color: #ef4444; font-weight: bold;', err.message);
-                console.error('Full error:', err);
                 setError(err.message);
                 setLoading(false);
             }

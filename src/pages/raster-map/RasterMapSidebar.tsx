@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { 
     Input, 
     Button, 
@@ -12,7 +12,6 @@ import {
     Tag,
     Empty,
     Spin,
-    Tooltip,
     Collapse,
     InputNumber,
     Badge,
@@ -33,8 +32,7 @@ import {
     AppstoreOutlined,
     PictureOutlined,
     NodeIndexOutlined,
-    EyeOutlined,
-    LoadingOutlined
+    EyeOutlined
 } from '@ant-design/icons';
 import type { 
     RasterFilterParams, 
@@ -44,14 +42,8 @@ import type {
     SortBy,
     DataType
 } from '../../types/raster.map.type';
+import RasterThumbnail from '../../components/RasterThumbnail';
 import dayjs from 'dayjs';
-
-// ============================================================================
-// ✅ DÜZƏLDİLMİŞ TiTiler URL konfiqurasiyası
-// ============================================================================
-// Development: /titiler-api → Vite proxy → https://tiles.mmdev.az/tiles
-// Production:  https://tiles.mmdev.az/tiles
-const TITILER_BASE = import.meta.env.DEV ? '/titiler-api' : 'https://tiles.mmdev.az/tiles';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -126,219 +118,6 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
         filters.cloudCover !== null,
         filters.resolution !== null
     ].filter(Boolean).length;
-
-    // S3 URL-dən fayl adını çıxar (backend böyük hərflə qaytarır: Href)
-    const getAssetFileName = (item: StacItem): string | null => {
-        const dataAsset = item.assets?.data;
-        const href = dataAsset?.Href || dataAsset?.href || 
-                    item.assets?.image?.Href || item.assets?.image?.href;
-        if (!href) return null;
-        const parts = href.split('/');
-        return parts[parts.length - 1] || null;
-    };
-
-    // COG URL əldə et
-    const getCogUrl = (item: StacItem): string | null => {
-        const dataAsset = item.assets?.data;
-        return dataAsset?.Href || dataAsset?.href || 
-               item.assets?.image?.Href || item.assets?.image?.href || null;
-    };
-
-    // ========================================================================
-    // ✅ DÜZƏLDİLMİŞ Raster Thumbnail komponenti
-    // ========================================================================
-    const RasterThumbnail: React.FC<{ 
-        item: StacItem; 
-        isSelected: boolean;
-        onClick: () => void;
-    }> = ({ item, isSelected, onClick }) => {
-        const [imageLoading, setImageLoading] = useState(true);
-        const [imageError, setImageError] = useState(false);
-        const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-        
-        const cogUrl = getCogUrl(item);
-
-        // Preview URL-ni statistics ilə yarat
-        useEffect(() => {
-            if (!cogUrl) {
-                setImageError(true);
-                return;
-            }
-
-            const loadPreview = async () => {
-                setImageLoading(true);
-                setImageError(false);
-                
-                try {
-                    // ✅ DÜZƏLDİLMİŞ URL: /titiler-api/cog/statistics
-                    const statsUrl = `${TITILER_BASE}/cog/statistics?url=${encodeURIComponent(cogUrl)}`;
-                    console.log('📊 Preview statistics URL:', statsUrl);
-                    
-                    const statsResponse = await fetch(statsUrl);
-                    
-                    if (!statsResponse.ok) {
-                        throw new Error(`Statistics error: ${statsResponse.status}`);
-                    }
-                    
-                    const stats = await statsResponse.json();
-                    console.log('✅ Statistics loaded for preview:', item.id);
-                    
-                    // Preview URL yarat rescale ilə
-                    const params = new URLSearchParams();
-                    params.append('url', cogUrl);
-                    params.append('max_size', '256');
-                    
-                    // İlk 3 band və onların rescale dəyərləri
-                    const bands = ['b1', 'b2', 'b3'];
-                    bands.forEach((band, index) => {
-                        params.append('bidx', String(index + 1));
-                        if (stats[band]) {
-                            const low = Math.floor(stats[band].percentile_2 || 0);
-                            const high = Math.ceil(stats[band].percentile_98 || 255);
-                            params.append('rescale', `${low},${high}`);
-                        } else {
-                            params.append('rescale', '0,255');
-                        }
-                    });
-                    
-                    // ✅ DÜZƏLDİLMİŞ URL: /titiler-api/cog/preview.png
-                    const url = `${TITILER_BASE}/cog/preview.png?${params.toString()}`;
-                    console.log('🖼️ Preview URL:', url);
-                    setPreviewUrl(url);
-                    
-                } catch (error) {
-                    console.warn('Statistics yüklənmədi, fallback istifadə edilir:', error);
-                    
-                    // Fallback - default rescale ilə
-                    const params = new URLSearchParams();
-                    params.append('url', cogUrl);
-                    params.append('max_size', '256');
-                    params.append('bidx', '1');
-                    params.append('bidx', '2');
-                    params.append('bidx', '3');
-                    params.append('rescale', '0,500');
-                    params.append('rescale', '0,700');
-                    params.append('rescale', '0,800');
-                    
-                    // ✅ DÜZƏLDİLMİŞ URL
-                    setPreviewUrl(`${TITILER_BASE}/cog/preview.png?${params.toString()}`);
-                }
-            };
-
-            loadPreview();
-        }, [cogUrl, item.id]);
-
-        return (
-            <div 
-                onClick={onClick}
-                style={{ 
-                    cursor: 'pointer',
-                    position: 'relative',
-                    width: '100%',
-                    height: 120,
-                    borderRadius: 8,
-                    overflow: 'hidden',
-                    background: '#f5f5f5',
-                    border: isSelected ? '3px solid #1677ff' : '1px solid #e8e8e8',
-                    transition: 'all 0.2s ease'
-                }}
-            >
-                {previewUrl && !imageError ? (
-                    <>
-                        {imageLoading && (
-                            <div style={{
-                                position: 'absolute',
-                                inset: 0,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
-                            }}>
-                                <LoadingOutlined style={{ fontSize: 24, color: 'white' }} />
-                            </div>
-                        )}
-                        <img
-                            src={previewUrl}
-                            alt={item.properties.title || item.id}
-                            style={{
-                                width: '100%',
-                                height: '100%',
-                                objectFit: 'cover',
-                                display: imageLoading ? 'none' : 'block'
-                            }}
-                            onLoad={() => setImageLoading(false)}
-                            onError={() => {
-                                console.error('Preview image load error for:', item.id);
-                                setImageLoading(false);
-                                setImageError(true);
-                            }}
-                        />
-                    </>
-                ) : !previewUrl && !imageError ? (
-                    <div style={{
-                        width: '100%',
-                        height: '100%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
-                    }}>
-                        <LoadingOutlined style={{ fontSize: 24, color: 'white' }} />
-                    </div>
-                ) : (
-                    <div style={{
-                        width: '100%',
-                        height: '100%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
-                    }}>
-                        <PictureOutlined style={{ fontSize: 32, color: 'rgba(255,255,255,0.5)' }} />
-                    </div>
-                )}
-
-                {/* Overlay with title */}
-                <div style={{
-                    position: 'absolute',
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    padding: '8px',
-                    background: 'linear-gradient(transparent, rgba(0,0,0,0.7))',
-                    color: 'white'
-                }}>
-                    <div style={{ 
-                        fontSize: 11, 
-                        fontWeight: 600,
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis'
-                    }}>
-                        {item.properties.title || getAssetFileName(item) || item.id}
-                    </div>
-                </div>
-
-                {/* Selected indicator */}
-                {isSelected && (
-                    <div style={{
-                        position: 'absolute',
-                        top: 8,
-                        right: 8,
-                        background: '#1677ff',
-                        borderRadius: '50%',
-                        width: 24,
-                        height: 24,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center'
-                    }}>
-                        <EyeOutlined style={{ color: 'white', fontSize: 12 }} />
-                    </div>
-                )}
-            </div>
-        );
-    };
 
     return (
         <div style={{ padding: 16, height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -677,7 +456,7 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                                             }}
                                             styles={{ body: { padding: 0 } }}
                                         >
-                                            {/* Thumbnail */}
+                                            {/* Thumbnail - ayrı komponentdən */}
                                             <RasterThumbnail
                                                 item={item}
                                                 isSelected={isSelected}
