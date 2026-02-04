@@ -136,7 +136,7 @@ export default function RasterMapPage() {
         setSelectedItem(item);
         
         // Raster seçildiyində mesaj göstər
-        if (item.properties.data_type === 'raster') {
+        if (item.properties.data_type === 'Raster') {
             message.info('Raster xəritəyə yüklənir...');
         }
     }, []);

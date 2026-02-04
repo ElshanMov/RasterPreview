@@ -1,18 +1,14 @@
 /**
  * RasterThumbnail Component
  * 
- * STAC Item üçün TiTiler preview göstərir.
- * React.memo ilə optimize edilib - lazımsız re-render-lərin qarşısını alır.
- * 
- * ⚡ OPTIMIZATION: Statistics skip edilib - preview üçün lazım deyil
- * Statistics API 20-30 saniyə çəkirdi, indi preview 300-600ms-də yüklənir
+ * ✅ CACHE FIRST: Statistics cache-dən oxunur (0.05ms), API fallback (5000ms)
  */
 
 import React, { useState, useEffect, memo, useRef } from 'react';
 import { LoadingOutlined, PictureOutlined, EyeOutlined } from '@ant-design/icons';
 import type { StacItem } from '../types/raster.map.type';
+import { getCachedStatistics } from '../services/statistics.cache';
 
-// TiTiler URL konfiqurasiyası
 const TITILER_BASE = import.meta.env.DEV ? '/titiler-api' : 'https://tiles.mmdev.az/tiles';
 
 interface RasterThumbnailProps {
@@ -48,74 +44,144 @@ const getShortFileName = (item: StacItem): string => {
     return fileName;
 };
 
-// Info cache - eyni COG üçün təkrar sorğu getməsin
-const infoCache = new Map<string, { dtype: string; bandCount: number }>();
+// ✅ Preview URL cache - eyni COG üçün təkrar sorğu getməsin
+const previewCache = new Map<string, string>();
 
-// /info endpoint-dən dtype alıb rescale təyin et
-const getInfoAndBuildUrl = async (cogUrl: string, shortName: string): Promise<string> => {
-    let dtype = 'uint8';
-    let bandCount = 3;
-    
-    // Cache yoxla
-    const cached = infoCache.get(cogUrl);
-    if (cached) {
-        dtype = cached.dtype;
-        bandCount = cached.bandCount;
-        console.log(`%c⚡ [${shortName}] Cache hit! dtype=${dtype}`, 'color: #10b981;');
-    } else {
-        // /info endpoint - statistics-dən 20-30x sürətli
-        const infoStart = performance.now();
+// ✅ CACHE FIRST: Statistics cache-dən oxu
+const buildPreviewUrl = async (cogUrl: string, shortName: string): Promise<string> => {
+    // Preview URL cache yoxla
+    const cachedUrl = previewCache.get(cogUrl);
+    if (cachedUrl) {
+        console.log(`%c⚡ [${shortName}] Preview URL cache hit!`, 'color: #10b981;');
+        return cachedUrl;
+    }
+
+    const startTime = performance.now();
+
+    try {
+        // Get info
         const infoUrl = `${TITILER_BASE}/cog/info?url=${encodeURIComponent(cogUrl)}`;
+        const infoStart = performance.now();
+        const infoResponse = await fetch(infoUrl);
         
-        try {
-            const response = await fetch(infoUrl);
-            if (response.ok) {
-                const info = await response.json();
-                dtype = info.dtype || 'uint8';
-                bandCount = info.count || 3;
-                
-                // Cache saxla
-                infoCache.set(cogUrl, { dtype, bandCount });
-                
-                const infoTime = performance.now() - infoStart;
-                console.log(
-                    `%c🔵 [${shortName}] Info: ${infoTime.toFixed(0)}ms | dtype=${dtype} | bands=${bandCount}`,
-                    infoTime > 500 ? 'color: #f59e0b;' : 'color: #3b82f6;'
-                );
-            }
-        } catch (e) {
-            console.warn(`⚠️ [${shortName}] Info failed, using defaults`);
+        if (!infoResponse.ok) {
+            throw new Error('Info failed');
         }
+        
+        const info = await infoResponse.json();
+        const infoTime = performance.now() - infoStart;
+        const bandCount = info.count || 3;
+
+        console.log(
+            `%c📊 [${shortName}] Info: ${infoTime.toFixed(0)}ms | bands=${bandCount}`,
+            infoTime > 500 ? 'color: #f59e0b;' : 'color: #3b82f6;'
+        );
+
+        // ✅ CACHE FIRST - Statistics
+        let rescales: string[] = [];
+        const cached = getCachedStatistics(cogUrl);
+        
+        if (cached) {
+            // ⚡ CACHE HIT - instant!
+            const cacheStart = performance.now();
+            
+            for (let i = 1; i <= Math.min(bandCount, 3); i++) {
+                const bandKey = `b${i}` as 'b1' | 'b2' | 'b3' | 'b4';
+                const bandStats = cached[bandKey];
+                
+                if (bandStats) {
+                    const low = Math.floor(bandStats.percentile_2);
+                    const high = Math.ceil(bandStats.percentile_98);
+                    rescales.push(`${low},${high}`);
+                } else {
+                    rescales.push('0,255');
+                }
+            }
+            
+            const cacheTime = performance.now() - cacheStart;
+            console.log(
+                `%c⚡ [${shortName}] Statistics CACHE HIT! ${cacheTime.toFixed(2)}ms`,
+                'color: #52c41a; font-weight: bold;'
+            );
+            console.log(`%c   Real rescale:`, 'color: #52c41a;', rescales);
+            
+        } else {
+            // ❌ CACHE MISS - API fallback
+            console.log(`%c⚠️ [${shortName}] Cache miss, fetching from API...`, 'color: #f59e0b;');
+            
+            const statsUrl = `${TITILER_BASE}/cog/statistics?url=${encodeURIComponent(cogUrl)}`;
+            const statsStart = performance.now();
+            const statsResponse = await fetch(statsUrl);
+            
+            if (statsResponse.ok) {
+                const stats = await statsResponse.json();
+                const statsTime = performance.now() - statsStart;
+                
+                console.log(
+                    `%c📈 [${shortName}] Statistics API: ${statsTime.toFixed(0)}ms`,
+                    statsTime > 2000 ? 'color: #ef4444;' : statsTime > 1000 ? 'color: #f59e0b;' : 'color: #10b981;'
+                );
+                
+                for (let i = 1; i <= Math.min(bandCount, 3); i++) {
+                    const bandKey = `b${i}`;
+                    const bandStats = stats[bandKey];
+                    
+                    if (bandStats && bandStats.percentile_2 !== undefined && bandStats.percentile_98 !== undefined) {
+                        const low = Math.floor(bandStats.percentile_2);
+                        const high = Math.ceil(bandStats.percentile_98);
+                        rescales.push(`${low},${high}`);
+                    } else {
+                        rescales.push('0,255');
+                    }
+                }
+                
+                console.log(`%c✅ [${shortName}] Real rescale from API:`, 'color: #52c41a;', rescales);
+            } else {
+                // Fallback to default
+                rescales = Array(Math.min(bandCount, 3)).fill('0,255');
+                console.warn(`⚠️ [${shortName}] Statistics failed, using default rescale`);
+            }
+        }
+
+        // Build URL
+        const params = new URLSearchParams();
+        params.append('url', cogUrl);
+        params.append('max_size', '256');
+        
+        for (let i = 1; i <= rescales.length; i++) {
+            params.append('bidx', String(i));
+            params.append('rescale', rescales[i - 1]);
+        }
+        
+        const url = `${TITILER_BASE}/cog/preview.png?${params.toString()}`;
+        
+        // Cache saxla
+        previewCache.set(cogUrl, url);
+        
+        const totalTime = performance.now() - startTime;
+        console.log(
+            `%c✅ [${shortName}] Total preview setup: ${totalTime.toFixed(0)}ms ${cached ? '(with cache ⚡)' : '(API)'}`,
+            totalTime > 2000 ? 'color: #ef4444;' : 'color: #10b981;'
+        );
+        
+        return url;
+        
+    } catch (error) {
+        console.error(`❌ [${shortName}] Preview URL build failed:`, error);
+        
+        // Fallback URL
+        const params = new URLSearchParams();
+        params.append('url', cogUrl);
+        params.append('max_size', '256');
+        params.append('bidx', '1');
+        params.append('bidx', '2');
+        params.append('bidx', '3');
+        params.append('rescale', '0,255');
+        params.append('rescale', '0,255');
+        params.append('rescale', '0,255');
+        
+        return `${TITILER_BASE}/cog/preview.png?${params.toString()}`;
     }
-    
-    // Rescale təyin et dtype-a görə
-    let rescale: string;
-    if (dtype.includes('uint8') || dtype.includes('int8')) {
-        rescale = '0,255';
-    } else if (dtype.includes('uint16')) {
-        // Satellite imagery üçün tipik dəyərlər (reflectance * 10000)
-        rescale = '0,3000';
-    } else if (dtype.includes('int16')) {
-        rescale = '0,3000';
-    } else if (dtype.includes('float')) {
-        rescale = '0,1';
-    } else {
-        rescale = '0,255'; // default
-    }
-    
-    // URL yarat
-    const params = new URLSearchParams();
-    params.append('url', cogUrl);
-    params.append('max_size', '256');
-    
-    // Band indexes
-    const bands = Math.min(bandCount, 3);
-    for (let i = 1; i <= bands; i++) {
-        params.append('bidx', String(i));
-        params.append('rescale', rescale);
-    }
-    
-    return `${TITILER_BASE}/cog/preview.png?${params.toString()}`;
 };
 
 const RasterThumbnailComponent: React.FC<RasterThumbnailProps> = ({ 
@@ -127,7 +193,6 @@ const RasterThumbnailComponent: React.FC<RasterThumbnailProps> = ({
     const [imageError, setImageError] = useState(false);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     
-    // Performance tracking refs
     const startTimeRef = useRef<number>(0);
     const imageStartTimeRef = useRef<number>(0);
     
@@ -152,8 +217,8 @@ const RasterThumbnailComponent: React.FC<RasterThumbnailProps> = ({
 
         const loadPreview = async () => {
             try {
-                // /info ilə URL yarat (statistics-dən 20-30x sürətli)
-                const url = await getInfoAndBuildUrl(cogUrl, shortName);
+                // ✅ Build URL with cache-first statistics
+                const url = await buildPreviewUrl(cogUrl, shortName);
                 
                 if (isMounted) {
                     imageStartTimeRef.current = performance.now();
@@ -192,7 +257,7 @@ const RasterThumbnailComponent: React.FC<RasterThumbnailProps> = ({
         const imageTime = performance.now() - imageStartTimeRef.current;
         const totalTime = performance.now() - startTimeRef.current;
         
-        const color = totalTime > 2000 ? '#ef4444' : totalTime > 1000 ? '#f59e0b' : '#10b981';
+        const color = totalTime > 5000 ? '#ef4444' : totalTime > 2000 ? '#f59e0b' : '#10b981';
         
         console.log(
             `%c✅ [${shortName}] TOTAL: ${totalTime.toFixed(0)}ms (image: ${imageTime.toFixed(0)}ms)`,
@@ -317,9 +382,8 @@ const RasterThumbnailComponent: React.FC<RasterThumbnailProps> = ({
     );
 };
 
-// React.memo ilə optimize et - yalnız props dəyişdikdə re-render olsun
+// React.memo ilə optimize et
 const RasterThumbnail = memo(RasterThumbnailComponent, (prevProps, nextProps) => {
-    // Yalnız bu prop-lar dəyişdikdə re-render et
     return (
         prevProps.item.id === nextProps.item.id &&
         prevProps.isSelected === nextProps.isSelected

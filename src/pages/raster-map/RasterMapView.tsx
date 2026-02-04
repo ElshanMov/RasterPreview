@@ -423,7 +423,7 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
     }, [isDrawingBbox, onCancelDraw]);
 
     // ✅ Seçilmiş item raster tipindədirsə yoxla
-    const isRasterItem = selectedItem?.properties?.data_type === 'raster' || 
+    const isRasterItem = selectedItem?.properties?.data_type === 'Raster' || 
                          Object.values(selectedItem?.assets || {}).some(
                              (asset: any) => asset.type?.includes('geotiff')
                          );

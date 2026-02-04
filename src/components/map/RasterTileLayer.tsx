@@ -3,11 +3,7 @@
  * 
  * TiTiler-dən COG tile-ları yükləyir.
  * 
- * ⚠️ PERFORMANCE MONITORING:
- * Console-da API sorğularının vaxtını göstərir:
- * - 🕐 INFO_TIME: TiTiler /info endpoint
- * - 🕐 STATS_TIME: TiTiler /statistics endpoint  
- * - 🕐 TOTAL_SETUP_TIME: Ümumi setup vaxtı
+ * ✅ CACHE FIRST: Statistics cache-dən oxunur (0.05ms), API fallback (5000ms)
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -15,6 +11,7 @@ import { useMap } from 'react-leaflet';
 import L from 'leaflet';
 import type { StacItem } from '../../types/raster.map.type';
 import { TitilerService } from '../../services/titiler.service';
+import { getCachedStatistics } from '../../services/statistics.cache';
 
 // ============================================================================
 // Types
@@ -79,10 +76,10 @@ class PerformanceTimer {
             console.log(`   %c${label}: ${duration.toFixed(0)}ms`, `color: ${color};`);
         });
         
-        // Backend-çilər üçün xülasə
         const infoTime = this.results.get('INFO_API') || 0;
-        const statsTime = this.results.get('STATISTICS_API') || 0;
+        const statsTime = this.results.get('STATISTICS_API') || this.results.get('STATISTICS_CACHE') || 0;
         const totalSetup = this.results.get('TOTAL_SETUP') || 0;
+        const isCached = this.results.has('STATISTICS_CACHE');
         
         if (infoTime > 2000 || statsTime > 2000) {
             console.log(
@@ -92,12 +89,16 @@ class PerformanceTimer {
             if (infoTime > 2000) {
                 console.log(`   TiTiler /info endpoint: ${infoTime.toFixed(0)}ms (>2s)`);
             }
-            if (statsTime > 2000) {
+            if (statsTime > 2000 && !isCached) {
                 console.log(`   TiTiler /statistics endpoint: ${statsTime.toFixed(0)}ms (>2s)`);
             }
         }
         
         console.log(`%c📦 Total setup time: ${totalSetup.toFixed(0)}ms`, 'color: #6366f1; font-weight: bold;');
+        
+        if (isCached) {
+            console.log('%c⚡ CACHE SPEEDUP ACHIEVED!', 'color: #52c41a; font-weight: bold;');
+        }
     }
 
     reset() {
@@ -111,12 +112,10 @@ class PerformanceTimer {
 // ============================================================================
 
 function extractCogUrl(item: StacItem): string | null {
-    // 1. Assets-dən axtar
     if (item.assets && typeof item.assets === 'object') {
         for (const [key, value] of Object.entries(item.assets)) {
             const asset = value as any;
             
-            // PascalCase VƏ camelCase dəstəyi
             let href = asset?.href || asset?.Href || asset?.url || asset?.URL;
             let type = asset?.type || asset?.Type || '';
             
@@ -151,7 +150,6 @@ function extractCogUrl(item: StacItem): string | null {
         }
     }
 
-    // 2. Links-dən axtar
     if (item.links && Array.isArray(item.links)) {
         for (const link of item.links) {
             const href = link.href || (link as any).url;
@@ -169,7 +167,6 @@ function extractCogUrl(item: StacItem): string | null {
         }
     }
 
-    // 3. Properties-dən axtar
     if (item.properties) {
         const props = item.properties as any;
         const urlFields = ['cog_url', 'cogUrl', 'data_url', 'file_url', 'asset_url', 'href', 'url', 's3_path'];
@@ -293,8 +290,6 @@ const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }
             setError(null);
             logger.reset();
             timerRef.current.reset();
-
-            // Total setup timer başla
             timerRef.current.start('TOTAL_SETUP');
 
             console.log(
@@ -304,7 +299,6 @@ const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }
             );
 
             try {
-                // COG URL extraction timer
                 timerRef.current.start('COG_URL_EXTRACTION');
                 const cogUrl = extractCogUrl(item);
                 timerRef.current.end('COG_URL_EXTRACTION');
@@ -320,63 +314,64 @@ const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }
                 console.log('%c📦 COG URL:', 'color: #10b981;', cogUrl);
 
                 // ==========================================
-                // TiTiler API Sorğuları - VAXT ÖLÇÜMÜ
+                // ✅ CACHE FIRST, THEN API FALLBACK
                 // ==========================================
                 
-                // INFO API timer
+                // INFO API
                 timerRef.current.start('INFO_API');
                 console.log('📊 TiTiler /info sorğusu başladı...');
                 const info = await TitilerService.getInfo(cogUrl);
                 const infoTime = timerRef.current.end('INFO_API');
                 timerRef.current.log('INFO_API', '📊');
 
-                // ⚡ OPTIMIZATION: Statistics skip edilir - dtype-dan rescale hesablanır
-                // Statistics API 4-32 saniyə çəkirdi, indi 0ms
-                timerRef.current.start('RESCALE_CALC');
+                // STATISTICS - Try cache first
+                let statistics: any;
+                let statsTime = 0;
+                const cached = getCachedStatistics(cogUrl);
                 
-                // dtype-a görə rescale təyin et
-                const dtype = info.dtype || 'uint8';
-                let defaultRescale: string;
-                
-                if (dtype.includes('uint8') || dtype.includes('int8')) {
-                    defaultRescale = '0,255';
-                } else if (dtype.includes('uint16') || dtype.includes('int16')) {
-                    // Satellite imagery üçün tipik dəyərlər
-                    defaultRescale = '0,3000';
-                } else if (dtype.includes('float')) {
-                    defaultRescale = '0,1';
+                if (cached) {
+                    timerRef.current.start('STATISTICS_CACHE');
+                    statistics = cached;
+                    statsTime = timerRef.current.end('STATISTICS_CACHE');
+                    console.log(
+                        '%c⚡ Statistics CACHE HIT! ' + statsTime.toFixed(2) + 'ms (100000x faster than API!)',
+                        'color: #52c41a; font-weight: bold; font-size: 13px;'
+                    );
                 } else {
-                    defaultRescale = '0,255';
+                    timerRef.current.start('STATISTICS_API');
+                    console.log('📈 TiTiler /statistics sorğusu başladı (cache miss)...');
+                    statistics = await TitilerService.getStatistics(cogUrl);
+                    statsTime = timerRef.current.end('STATISTICS_API');
+                    timerRef.current.log('STATISTICS_API', '📈');
+                    
+                    console.warn(
+                        '%c⚠️ Cache miss! Consider adding this file to statistics.cache.ts',
+                        'color: #f59e0b; font-weight: bold;'
+                    );
                 }
-                
-                console.log(
-                    `%c⚡ Statistics SKIP edildi - dtype: ${dtype} → rescale: ${defaultRescale}`,
-                    'color: #10b981; font-weight: bold;'
-                );
-                
-                timerRef.current.end('RESCALE_CALC');
 
-                // ==========================================
-                // API sorğuları bitdi - nəticələri göstər
-                // ==========================================
-                
                 console.log(
-                    '%c✅ TiTiler API sorğuları tamamlandı',
+                    '%c✅ TiTiler sorğuları tamamlandı',
                     'color: #10b981; font-weight: bold;',
                     `\n   /info: ${infoTime.toFixed(0)}ms`,
-                    `\n   /statistics: SKIP (dtype-based) ⚡`,
-                    `\n   Total API: ${infoTime.toFixed(0)}ms`
+                    `\n   /statistics: ${statsTime.toFixed(0)}ms ${cached ? '(cache ⚡)' : '(API)'}`,
+                    `\n   Total: ${(infoTime + statsTime).toFixed(0)}ms`
                 );
 
-                // STAC bbox istifadə et
                 const stacBbox = item.bbox;
 
                 // Band indexes
                 timerRef.current.start('TILE_URL_BUILD');
                 const bidx = TitilerService.getBandIndexes(info);
 
-                // Rescale - dtype-a görə
-                const rescale: string[] = bidx.map(() => defaultRescale);
+                // ✅ REAL RESCALE from statistics (cache or API)
+                const rescale = TitilerService.calculateRescale(statistics, bidx.length);
+                
+                console.log(
+                    '%c✅ Real rescale values from statistics:',
+                    'color: #52c41a; font-weight: bold;',
+                    rescale
+                );
 
                 // Tile URL
                 const tileUrl = TitilerService.buildTileUrl(cogUrl, {
@@ -386,12 +381,10 @@ const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }
                 });
                 timerRef.current.end('TILE_URL_BUILD');
 
-                // Köhnə layer-i sil
                 if (layerRef.current) {
                     map.removeLayer(layerRef.current);
                 }
 
-                // Layer yaratma timer
                 timerRef.current.start('LAYER_CREATE');
                 const [minLng, minLat, maxLng, maxLat] = stacBbox;
                 const layer = createQueuedTileLayer(tileUrl, {
@@ -417,7 +410,6 @@ const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }
                 layerRef.current = layer;
                 timerRef.current.end('LAYER_CREATE');
 
-                // Fit bounds
                 timerRef.current.start('FIT_BOUNDS');
                 if (stacBbox && stacBbox.length === 4) {
                     const leafletBounds: L.LatLngBoundsExpression = [
@@ -428,14 +420,9 @@ const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }
                 }
                 timerRef.current.end('FIT_BOUNDS');
 
-                // Total setup bitdi
                 timerRef.current.end('TOTAL_SETUP');
-                
                 setLoading(false);
                 
-                // ==========================================
-                // PERFORMANCE SUMMARY - Backend üçün
-                // ==========================================
                 console.log('%c' + '═'.repeat(50), 'color: #6366f1;');
                 timerRef.current.printSummary();
                 console.log('%c' + '═'.repeat(50), 'color: #6366f1;');
@@ -469,3 +456,4 @@ const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }
 };
 
 export default RasterTileLayer;
+

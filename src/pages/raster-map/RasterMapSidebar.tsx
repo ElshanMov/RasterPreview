@@ -157,11 +157,11 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                     {filters.dataType !== 'all' && (
                         <div style={{ marginTop: 8 }}>
                             <Tag 
-                                color={filters.dataType === 'raster' ? 'blue' : 'purple'}
+                                color={filters.dataType === 'Raster' ? 'blue' : 'purple'}
                                 closable
                                 onClose={() => onFilterChange({ dataType: 'all' })}
                             >
-                                {filters.dataType === 'raster' ? (
+                                {filters.dataType === 'Raster' ? (
                                     <><PictureOutlined /> Yalnız Raster</>
                                 ) : (
                                     <><NodeIndexOutlined /> Yalnız Vector</>
@@ -296,7 +296,7 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                                     <div style={{ marginBottom: 16 }}>
                                         <Text style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
                                             <CloudOutlined /> Bulud örtüyü (maks %)
-                                            {filters.dataType === 'vector' && (
+                                            {filters.dataType === 'Vector' && (
                                                 <Tag color="orange" style={{ marginLeft: 8, fontSize: 10 }}>
                                                     Vector üçün keçərli deyil
                                                 </Tag>
@@ -308,7 +308,7 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                                             value={filters.cloudCover ?? 100}
                                             onChange={(value) => onFilterChange({ cloudCover: value })}
                                             marks={{ 0: '0%', 50: '50%', 100: '100%' }}
-                                            disabled={filters.dataType === 'vector'}
+                                            disabled={filters.dataType === 'Vector'}
                                         />
                                     </div>
 
@@ -437,7 +437,7 @@ const RasterMapSidebar: React.FC<RasterMapSidebarProps> = ({
                     ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                             {results.map((item) => {
-                                const isRaster = item.properties.data_type === 'raster';
+                                const isRaster = item.properties.data_type === 'Raster';
                                 const isSelected = selectedItem?.id === item.id;
 
                                 // Raster üçün thumbnail card

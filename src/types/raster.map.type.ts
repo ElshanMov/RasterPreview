@@ -3,7 +3,7 @@
 // ==========================================
 
 // ✅ Data Type - Raster və ya Vector seçimi üçün
-export type DataType = 'all' | 'raster' | 'vector';
+export type DataType = 'all' | 'Raster' | 'Vector';
 
 export interface BboxCoords {
     minLat: number;
@@ -116,7 +116,7 @@ export interface StacItemProperties {
     'proj:epsg'?: number;
     'gsd'?: number;
     // Backend-dən gələcək data_type
-    data_type?: 'raster';
+    data_type?: 'Raster';
     // Vector-specific properties
     feature_count?: number;
     pipeline_type?: string;
