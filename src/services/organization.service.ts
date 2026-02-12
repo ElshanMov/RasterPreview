@@ -6,7 +6,7 @@ const API_URL = import.meta.env.VITE_API_URL;
 
 export const OrganizationService = {
   getOrganizations: async (params: OrganizationParamsType): Promise<any> => {
-    return await api.get(`${API_URL}/auth/api/v1/organizations`, {
+    return await api.get(`http://app.mmdev.az/auth/api/v1/organizations`, {
       params,
       paramsSerializer: (params) => {
         return qs.stringify(params);
@@ -14,6 +14,6 @@ export const OrganizationService = {
     });
   },
   getAllOrganizations: async (): Promise<any> => {
-    return await api.get(`${API_URL}/auth/api/v1/organizations/all`);
+    return await api.get(`http://app.mmdev.az/auth/api/v1/organizations/all`);
   }
 }

@@ -3,6 +3,7 @@ import { Button, Space, Typography } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import RasterList from './RasterList';
+import RasterUploadPipeline from './RasterUploadPipeline';
 
 const { Title } = Typography;
 
@@ -27,6 +28,9 @@ export default function RastersPage() {
                     Upload
                 </Button>
             </Space>
+
+            {/* Upload Pipeline Tracker */}
+            <RasterUploadPipeline />
 
             <RasterList key={refreshKey} />
         </div>

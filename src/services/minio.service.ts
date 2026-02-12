@@ -51,9 +51,7 @@ export const MinIOService = {
 
         // Send request
         xhr.open('PUT', presignedUrl);
-        xhr.setRequestHeader('Content-Type', 'image/tiff');
         
-        console.log('📤 Sending file...');
         xhr.send(file);
     });
 }

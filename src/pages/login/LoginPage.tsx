@@ -9,7 +9,7 @@ export default function Login() {
   const handleLogin = async (form: { username: string; password: string }) => {
     setLoading(true);
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/auth/api/v1/accounts/sign-in`, {
+      const response = await fetch(`http://app.mmdev.az/auth/api/v1/accounts/sign-in`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

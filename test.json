@@ -1,0 +1,56 @@
+{
+    "id": "be99a071-e8d8-42a0-8c3c-2d8ef872e763",
+    "collection": "019b26d3-9d03-7b6b-856f-970168770cc0_RTR",
+    "type": "Feature",
+    "stac_version": "1.0.0",
+    "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [
+                    30.30769582468057,
+                    46.250604039427095
+                ],
+                [
+                    31.108074705705867,
+                    46.250604039427095
+                ],
+                [
+                    31.108074705705867,
+                    46.71614030470577
+                ],
+                [
+                    30.30769582468057,
+                    46.71614030470577
+                ],
+                [
+                    30.30769582468057,
+                    46.250604039427095
+                ]
+            ]
+        ]
+    },
+    "bbox": [
+        30.30769582468057,
+        46.250604039427095,
+        31.108074705705867,
+        46.71614030470577
+    ],
+    "properties": {
+        "datetime": "2026-02-11T09:30:57.061015\u002B00:00",
+        "organization_name": "019b26d3-9d03-7b6b-856f-970168770cc0",
+        "branch_name": "019b26e8-1b30-7da1-baae-72280221b27c",
+        "data_type": "Raster"
+    },
+    "assets": {
+        "data": {
+            "Href": "s3://raster-cog-files/azeriqaz/10.00x10.00/ukraineodessa/ukraineodessa.tif",
+            "Type": "image/tiff; application=geotiff; profile=cloud-optimized",
+            "Title": "UkraineOdessa.tif",
+            "Roles": [
+                "data"
+            ]
+        }
+    },
+    "links": []
+}

@@ -18,7 +18,6 @@ export const FileService = {
     },
      // Complete upload
     completeRasterUpload: async (stacItem: any): Promise<any> => {
-        debugger
         return await api.post(`${API_URL}/pipeline/api/v1/files/raster/complete-upload`, {
             stacItem
         });

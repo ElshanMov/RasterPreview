@@ -1,11 +1,13 @@
 import snackbarReducer from '../store/slices/snackbarSlice'
 import loadingReducer from '../store/slices/loadingSlice'
+import rasterUploadReducer from '../store/slices/rasterUploadSlice'
 import { configureStore, type ThunkAction, type Action } from '@reduxjs/toolkit'
 
 export const store = configureStore({
   reducer: {
     loading: loadingReducer,
-    snackbar: snackbarReducer
+    snackbar: snackbarReducer,
+    rasterUpload: rasterUploadReducer,
   },
 })
 

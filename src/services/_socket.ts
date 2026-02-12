@@ -1,4 +1,7 @@
 import { HubConnection, HubConnectionBuilder, LogLevel, HubConnectionState } from '@microsoft/signalr';
+import { store } from '../store/store';
+import { handleWebSocketEvent } from '../store/slices/rasterUploadSlice';
+import type { RasterUploadProgressEvent } from '../types/raster-upload.type';
 
 class Socket {
   private connection: HubConnection | null = null;
@@ -16,7 +19,7 @@ class Socket {
         accessTokenFactory: () => localStorage.getItem('accessToken') || '',
       })
       .withAutomaticReconnect()
-      .configureLogging(LogLevel.Warning) // Error-dan bir az daha geniş məlumat üçün
+      .configureLogging(LogLevel.Warning)
       .build();
 
     this.setupListeners();
@@ -33,10 +36,17 @@ class Socket {
   private setupListeners() {
     if (!this.connection) return;
 
+    // ─── Mövcud pipeline listener ───────────────────────
     this.connection.off('pipeline_synchronized');
-
     this.connection.on('pipeline_synchronized', () => {
       this.pipelineSynchronizedCallback?.();
+    });
+
+    // ─── Yeni: Raster Upload Progress listener ──────────
+    this.connection.off('raster_upload_progress');
+    this.connection.on('raster_upload_progress', (event: RasterUploadProgressEvent) => {
+      console.log('[WS] Raster upload progress:', event);
+      store.dispatch(handleWebSocketEvent(event));
     });
   }
 
