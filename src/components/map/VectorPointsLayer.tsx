@@ -33,7 +33,7 @@ const VectorPointsLayer: React.FC<VectorPointsLayerProps> = ({
     const clusterGroupRef = useRef<L.MarkerClusterGroup | null>(null);
     const loadedBoundsRef = useRef<string | null>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
-    const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Create custom point icon
     const createIcon = useCallback((isSelected: boolean = false) => {

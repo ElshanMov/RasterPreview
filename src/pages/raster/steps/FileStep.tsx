@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Space, Card, Typography, Row, Col, Spin, Alert, Form } from 'antd';
+import { Button, Space, Card, Typography, Row, Col, Spin, Alert, Form, Switch, Tooltip } from 'antd';
 import { Upload } from 'antd';
-import { FileImageOutlined, DeleteOutlined } from '@ant-design/icons';
+import { FileImageOutlined, DeleteOutlined, EyeOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import RasterPreview from '../UploadRasterPreview';
 import { useRasterPreview } from '../../../hooks/useRasterPreview';
@@ -14,7 +14,8 @@ interface FileStepProps {
     organizationName?: string;
     onNext: () => void;
     onPrev: () => void;
-    onFileSelect: (file: File | null) => void;  // ✅ NEW
+    onFileSelect: (file: File | null) => void;
+    onPreviewToggle?: (enabled: boolean) => void;  // ✅ Parent-ə bildiriş
 }
 
 const FileStep: React.FC<FileStepProps> = ({ 
@@ -22,7 +23,8 @@ const FileStep: React.FC<FileStepProps> = ({
     organizationName,
     onNext, 
     onPrev,
-    onFileSelect  // ✅ NEW
+    onFileSelect,
+    onPreviewToggle,
 }) => {
     const {
         loading,
@@ -36,6 +38,18 @@ const FileStep: React.FC<FileStepProps> = ({
     } = useRasterPreview();
 
     const [fileSelected, setFileSelected] = useState(false);
+    const [previewEnabled, setPreviewEnabled] = useState(true);
+    const [rawFile, setRawFile] = useState<File | null>(null);
+
+    const handlePreviewToggle = (checked: boolean) => {
+        setPreviewEnabled(checked);
+        onPreviewToggle?.(checked);
+
+        // Toggle açıldıqda və fayl artıq seçilibsə — preview-u işə sal
+        if (checked && rawFile && !metadata) {
+            processFile(rawFile);
+        }
+    };
 
     const handleChange = (info: any) => {
         const file = info.fileList[0]?.originFileObj;
@@ -46,13 +60,30 @@ const FileStep: React.FC<FileStepProps> = ({
         }
 
         setFileSelected(true);
-        processFile(file);
-        onFileSelect(file);  // ✅ Send file to parent
+        setRawFile(file);
+        onFileSelect(file);
+
+        if (previewEnabled) {
+            processFile(file);
+        } else {
+            // Preview olmadan — yalnız fileName və fileSize yazılır
+            form.setFieldsValue({
+                fileName: file.name,
+                fileSize: file.size,
+                width: undefined,
+                height: undefined,
+                bands: undefined,
+                srid: undefined,
+                bounds: undefined,
+                overviews: undefined,
+            });
+        }
     };
 
     const removeFile = () => {
         setFileSelected(false);
-        onFileSelect(null);  // ✅ Clear file in parent
+        setRawFile(null);
+        onFileSelect(null);
         form.setFieldsValue({
             fileName: undefined,
             fileSize: undefined,
@@ -90,7 +121,11 @@ const FileStep: React.FC<FileStepProps> = ({
         }
     }, [metadata, currentFile, form]);
 
-    const canProceed = preview && metadata && currentFile;
+    // Preview ON  → preview + metadata + file lazımdır
+    // Preview OFF → yalnız file lazımdır
+    const canProceed = previewEnabled
+        ? !!(preview && metadata && currentFile)
+        : !!(fileSelected && rawFile);
 
     return (
         <Card>
@@ -105,6 +140,44 @@ const FileStep: React.FC<FileStepProps> = ({
                         closable
                     />
                 )}
+
+                {/* ✅ Preview Toggle */}
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'flex-end',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '8px 12px',
+                    background: previewEnabled ? '#f0f5ff' : '#f5f5f5',
+                    borderRadius: 8,
+                    border: `1px solid ${previewEnabled ? '#adc6ff' : '#d9d9d9'}`,
+                    transition: 'all 0.3s',
+                }}>
+                    <Tooltip title={
+                        previewEnabled
+                            ? 'Fayl seçildikdə önbaxış göstəriləcək (GeoTIFF analiz edilir)'
+                            : 'Önbaxış olmadan birbaşa yükləməyə keçin (daha sürətli)'
+                    }>
+                        <Space size="small">
+                            {previewEnabled
+                                ? <EyeOutlined style={{ color: '#1677ff' }} />
+                                : <EyeInvisibleOutlined style={{ color: '#8c8c8c' }} />
+                            }
+                            <Text style={{
+                                fontSize: 13,
+                                color: previewEnabled ? '#1677ff' : '#8c8c8c',
+                                fontWeight: 500,
+                            }}>
+                                Önbaxış
+                            </Text>
+                            <Switch
+                                checked={previewEnabled}
+                                onChange={handlePreviewToggle}
+                                size="small"
+                            />
+                        </Space>
+                    </Tooltip>
+                </div>
 
                 <div style={{ display: 'none' }}>
                     <Form.Item name="fileName"><input /></Form.Item>
@@ -139,7 +212,8 @@ const FileStep: React.FC<FileStepProps> = ({
                     </Dragger>
                 )}
 
-                {loading && fileSelected && (
+                {/* Preview ON + loading */}
+                {previewEnabled && loading && fileSelected && (
                     <div style={{ textAlign: 'center', padding: 50 }}>
                         <Spin size="large" />
                         <div style={{ marginTop: 16, fontSize: 16 }}>
@@ -148,8 +222,9 @@ const FileStep: React.FC<FileStepProps> = ({
                     </div>
                 )}
 
-                {fileSelected && currentFile && !loading && (
+                {fileSelected && (currentFile || rawFile) && !(previewEnabled && loading) && (
                     <>
+                        {/* Fayl info bar */}
                         <div style={{
                             display: 'flex', 
                             justifyContent: 'space-between', 
@@ -164,10 +239,10 @@ const FileStep: React.FC<FileStepProps> = ({
                                 <FileImageOutlined style={{ color: '#52c41a', fontSize: '24px' }} />
                                 <div>
                                     <Text strong style={{ display: 'block' }}>
-                                        {currentFile.name}
+                                        {(currentFile || rawFile)!.name}
                                     </Text>
                                     <Text type="secondary" style={{ fontSize: '12px' }}>
-                                        Ölçü: {(currentFile.size / 1024 / 1024).toFixed(2)} MB
+                                        Ölçü: {((currentFile || rawFile)!.size / 1024 / 1024).toFixed(2)} MB
                                     </Text>
                                 </div>
                             </Space>
@@ -182,42 +257,31 @@ const FileStep: React.FC<FileStepProps> = ({
                             </Button>
                         </div>
 
-                        {preview && metadata && (
+                        {/* Preview ON → metadata + preview göstər */}
+                        {previewEnabled && preview && metadata && (
                             <Row gutter={[16, 16]}>
                                 <Col span={16}>
                                     <Card title="Preview" size="small">
-                                        <div style={{ 
-                                            height: 400, 
-                                            border: '1px solid #d9d9d9', 
-                                            borderRadius: 8,
-                                            overflow: 'hidden' 
-                                        }}>
-                                            <RasterPreview
-                                                imageUrl={preview.imageUrl}
-                                                bounds={preview.bounds}
-                                            />
-                                        </div>
+                                        <RasterPreview
+                                            imageUrl={preview.imageUrl}
+                                            bounds={preview.bounds}
+                                        />
                                     </Card>
                                 </Col>
-
                                 <Col span={8}>
-                                    <Card title="Fayl Məlumatları" size="small">
-                                        <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                                    <Card title="Metadata" size="small">
+                                        <Space direction="vertical" size={4} style={{ width: '100%' }}>
                                             <div>
-                                                <Text type="secondary">Dimensions:</Text>
-                                                <div>{metadata.width} × {metadata.height}</div>
+                                                <Text type="secondary">Ölçü:</Text> {metadata.width} × {metadata.height}
                                             </div>
                                             <div>
-                                                <Text type="secondary">Bandlar:</Text>
-                                                <div>{metadata.bands}</div>
+                                                <Text type="secondary">Bandlar:</Text> {metadata.bands}
                                             </div>
                                             <div>
-                                                <Text type="secondary">CRS:</Text>
-                                                <div>{metadata.crs}</div>
+                                                <Text type="secondary">CRS:</Text> {metadata.crs}
                                             </div>
                                             <div>
-                                                <Text type="secondary">Overviews:</Text>
-                                                <div>{metadata.overviews}</div>
+                                                <Text type="secondary">Overviews:</Text> {metadata.overviews}
                                             </div>
                                             {statistics && statistics[0] && (
                                                 <>
@@ -236,6 +300,17 @@ const FileStep: React.FC<FileStepProps> = ({
                                     </Card>
                                 </Col>
                             </Row>
+                        )}
+
+                        {/* Preview OFF → sadə məlumat */}
+                        {!previewEnabled && (
+                            <Alert
+                                message="Önbaxış deaktivdir"
+                                description="Fayl önbaxış olmadan birbaşa yüklənəcək. Metadata və statistika serverdə hesablanacaq."
+                                type="info"
+                                showIcon
+                                icon={<EyeInvisibleOutlined />}
+                            />
                         )}
                     </>
                 )}

@@ -1,61 +1,132 @@
-import JSZip from "jszip";
-import shp from "shpjs";
+import { ZipReader, BlobReader, TextWriter } from "@zip.js/zip.js";
+import type { Entry } from "@zip.js/zip.js";
 
-const normalizeShpResult = (result: Awaited<ReturnType<typeof shp>>) => {
-    if (Array.isArray(result)) {
-        return result[0] ?? { type: "FeatureCollection" as const, features: [] };
+const SHAPE_TYPES: Record<number, string> = {
+    0: "Null",
+    1: "Point",
+    3: "LineString",
+    5: "Polygon",
+    8: "MultiPoint",
+    11: "PointZ",
+    13: "LineStringZ",
+    15: "PolygonZ",
+    18: "MultiPointZ",
+};
+
+/**
+ * Helper: Streams only the needed bytes from a ZIP entry and aborts decompression early.
+ */
+async function getStreamedBytes(entry: any, targetSize: number): Promise<Uint8Array> {
+    const controller = new AbortController();
+    const result = new Uint8Array(targetSize);
+    let offset = 0;
+    try {
+        await entry.getData(new WritableStream({
+            write(chunk: Uint8Array) {
+                const toCopy = Math.min(chunk.length, targetSize - offset);
+                result.set(chunk.slice(0, toCopy), offset);
+                offset += toCopy;
+                // Once we have enough bytes, kill the stream to save CPU/Time
+                if (offset >= targetSize) controller.abort();
+            }
+        }), { signal: controller.signal });
+    } catch (e: any) {
+        if (e.name !== "AbortError") throw e;
     }
     return result;
+}
+
+/**
+ * DBF Header Parser for metadata (column names and record count)
+ */
+const parseDbfMetadata = (buffer: Uint8Array): { recordCount: number; columns: string[] } => {
+    const view = new DataView(buffer.buffer);
+    const recordCount = view.getUint32(4, true);
+    const headerSize = view.getUint16(8, true);
+    const fieldCount = Math.floor((headerSize - 33) / 32);
+
+    const columns: string[] = [];
+    for (let i = 0; i < fieldCount; i++) {
+        const fieldStart = 32 + (i * 32);
+        const nameBytes = buffer.slice(fieldStart, fieldStart + 11);
+        const nullIndex = nameBytes.indexOf(0);
+        const name = new TextDecoder()
+            .decode(nameBytes.slice(0, nullIndex > 0 ? nullIndex : 11))
+            .trim();
+        if (name) columns.push(name);
+    }
+    return { recordCount, columns };
 };
 
 export const analyzeShapefile = async (zipFile: File) => {
-    const arrayBuffer = await zipFile.arrayBuffer();
-    const zip = await JSZip.loadAsync(arrayBuffer);
+    if (!zipFile) throw new Error("Fayl seçilməyib");
 
-    const originalFiles = Object.keys(zip.files);
-    const fileMap = Object.fromEntries(
-        originalFiles.map((f) => [f.toLowerCase(), f])
-    );
-    const filesLower = originalFiles.map((f) => f.toLowerCase());
+    const zipReader = new ZipReader(new BlobReader(zipFile));
 
-    const requiredFiles = [".prj", ".shp", ".shx", ".dbf"];
-    const missingRequired = requiredFiles.filter(
-        (ext) => !filesLower.some((f) => f.endsWith(ext))
-    );
+    try {
+        const entries = await zipReader.getEntries();
+        if (entries.length === 0) throw new Error("ZIP faylı boşdur");
 
-    if (missingRequired.length > 0) {
-        throw new Error(
-            `❌ ZIP-də tələb olunan fayllar yoxdur: ${missingRequired.join(", ")}`
+        const fileNames = entries.map((e) => e.filename.toLowerCase());
+        const requiredFiles = [".prj", ".shp", ".shx", ".dbf"];
+        const missingRequired = requiredFiles.filter(
+            (ext) => !fileNames.some((f) => f.endsWith(ext))
         );
+
+        if (missingRequired.length > 0) {
+            throw new Error(`❌ ZIP-də tələb olunan fayllar yoxdur: ${missingRequired.join(", ")}`);
+        }
+
+        const findEntry = (ext: string): Entry | undefined =>
+            entries.find((e) => e.filename.toLowerCase().endsWith(ext));
+
+        const shpEntry = findEntry(".shp");
+        const dbfEntry = findEntry(".dbf");
+        const prjEntry = findEntry(".prj");
+
+        // 1. Read PRJ (Coordinate System) - Small text, safe to read fully
+        let prjWkt: string | null = null;
+        if (prjEntry && (prjEntry as any).getData) {
+            prjWkt = await (prjEntry as any).getData(new TextWriter());
+        }
+
+        // 2. Read SHP Header (Geometry Type) - Using Stream/Abort for speed
+        let geometryType: string | null = null;
+        if (shpEntry) {
+            const shpHeader = await getStreamedBytes(shpEntry, 100);
+            const shapeTypeCode = new DataView(shpHeader.buffer).getInt32(32, true);
+            geometryType = SHAPE_TYPES[shapeTypeCode] || "Unknown";
+        }
+
+        // 3. Read DBF Header (Count and Columns) - Using Stream/Abort for speed
+        let featureCount = 0;
+        let columns: string[] = [];
+        if (dbfEntry) {
+            // We need enough of the DBF to read the field descriptors (usually ~1-2KB)
+            // Reading the first 2048 bytes is safe and covers most Shapefiles
+            const dbfBuffer = await getStreamedBytes(dbfEntry, 2048);
+            const dbfInfo = parseDbfMetadata(dbfBuffer);
+            featureCount = dbfInfo.recordCount;
+            columns = dbfInfo.columns;
+        }
+
+        const businessKeyColumns = columns.filter((key) =>
+            key.toLowerCase().includes("id")
+        );
+
+        const sourceName = zipFile.name.split(".zip")[0];
+        const sourceSrid = detectSrid(prjWkt);
+
+        return {
+            sourceName,
+            sourceSrid,
+            geometryType,
+            businessKeyColumns,
+            featureCount,
+        };
+    } finally {
+        await zipReader.close();
     }
-
-    let prjWkt: string | null = null;
-    const prjLower = filesLower.find((f) => f.endsWith(".prj"));
-    if (prjLower) {
-        const realPrjName = fileMap[prjLower];
-        prjWkt = await zip.files[realPrjName].async("string");
-    }
-
-    const result = await shp(arrayBuffer);
-    const geojson = normalizeShpResult(result); // <-- Normallaşdır
-
-    const geometryType = geojson.features?.[0]?.geometry?.type ?? null;
-    const properties = geojson.features?.[0]?.properties ?? {};
-
-    const businessKeyColumns = Object.keys(properties).filter((key) =>
-        key.toLowerCase().includes("id")
-    );
-
-    const sourceName = zipFile.name.split(".zip")[0];
-    const sourceSrid = detectSrid(prjWkt);
-
-    return {
-        sourceName,
-        sourceSrid,
-        geometryType,
-        businessKeyColumns,
-        featureCount: geojson.features?.length ?? 0,
-    };
 };
 
 export const detectSrid = (wkt: string | null | undefined): number => {

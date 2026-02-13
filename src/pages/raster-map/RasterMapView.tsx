@@ -14,7 +14,7 @@ import VectorPointsLayer from '../../components/map/VectorPointsLayer';
 import RasterTileLayer from '../../components/map/RasterTileLayer';  // ✅ ƏLAVƏ EDİLDİ
 import dayjs from 'dayjs';
 import 'leaflet/dist/leaflet.css';
-
+import '../../services/titiler.service'; // ✅ COG info və statistikaları üçün
 const { BaseLayer } = LayersControl;
 const { Text } = Typography;
 
@@ -396,9 +396,9 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
     // ✅ YENİ: Vector points state
     const [showVectorPoints, setShowVectorPoints] = useState(false);
     // ✅ YENİ: Raster tile layer visibility
-    const [showRasterTiles, setShowRasterTiles] = useState(true);
+    const [showRasterTiles] = useState(true);
     // ✅ YENİ: Raster loading state
-    const [rasterLoading, setRasterLoading] = useState(false);
+    const [rasterLoading] = useState(false);
 
     const toggleFullscreen = useCallback(() => {
         if (!document.fullscreenElement) {
@@ -616,11 +616,14 @@ const RasterMapView: React.FC<RasterMapViewProps> = ({
 
             {/* Leaflet Map */}
             <MapContainer
-                center={[40.4093, 49.8671]}
-                zoom={7}
-                style={{ height: '100%', width: '100%' }}
-                zoomControl={true}
-            >
+    center={[40.4093, 49.8671]}
+    zoom={10}
+    style={{ width: '100%', height: '100%' }}
+    preferCanvas={true}              // ✅ SVG → Canvas (qat-qat sürətli)
+    wheelDebounceTime={80}           // ✅ sürətli scroll-u throttle et
+    wheelPxPerZoomLevel={120}        // ✅ bir zoom səviyyəsi üçün daha çox scroll lazım
+    zoomSnap={0.5}                   // ✅ zoom addımı (smooth amma nəzarətli)
+>
                 {/* Map Drag Controller */}
                 <MapDragController isDrawing={isDrawingBbox} />
 

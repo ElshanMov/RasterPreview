@@ -1,20 +1,24 @@
 /**
  * RasterTileLayer Component
  * 
- * TiTiler-dən COG tile-ları yükləyir.
+ * FAYL YOLU: src/components/map/RasterTileLayer.tsx
  * 
- * ✅ CACHE FIRST: Statistics cache-dən oxunur (0.05ms), API fallback (5000ms)
+ * ✅ Bbox filtr — kənarda olan tile-lara sorğu getmir
+ * ✅ Zoom debounce — sürətli zoom-da UI donmur
+ * ✅ Queue limit — max 50 tile gözləyə bilər
+ * ✅ AbortController — zoom dəyişdikdə köhnə sorğular ləğv olur
+ * ✅ Console logger: TiTilerLog.print()
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useMap } from 'react-leaflet';
 import L from 'leaflet';
 import type { StacItem } from '../../types/raster.map.type';
 import { TitilerService } from '../../services/titiler.service';
-import { getCachedStatistics } from '../../services/statistics.cache';
+import { fetchRescale, toRescaleStrings } from '../../services/statistics.cache';
 
 // ============================================================================
-// Types
+// Types & Constants
 // ============================================================================
 
 interface RasterTileLayerProps {
@@ -22,90 +26,116 @@ interface RasterTileLayerProps {
     opacity?: number;
 }
 
-interface QueuedTile {
-    coords: L.Coords;
-    tile: HTMLImageElement;
-    done: L.DoneCallback;
-    retryCount: number;
-}
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-const MAX_CONCURRENT_REQUESTS = 4;
+const MAX_CONCURRENT = 6;
+const MAX_QUEUE = 50;
 const TRANSPARENT_TILE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
 // ============================================================================
-// Performance Timer
+// Bbox Utilities
 // ============================================================================
 
-class PerformanceTimer {
-    private timers: Map<string, number> = new Map();
-    private results: Map<string, number> = new Map();
+function tileToBounds(z: number, x: number, y: number): [number, number, number, number] {
+    const pow = Math.pow(2, z);
+    const minLng = (x / pow) * 360 - 180;
+    const maxLng = ((x + 1) / pow) * 360 - 180;
+    const n1 = Math.PI - (2 * Math.PI * y) / pow;
+    const maxLat = (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n1) - Math.exp(-n1)));
+    const n2 = Math.PI - (2 * Math.PI * (y + 1)) / pow;
+    const minLat = (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n2) - Math.exp(-n2)));
+    return [minLng, minLat, maxLng, maxLat];
+}
 
-    start(label: string) {
-        this.timers.set(label, performance.now());
+function bboxIntersects(
+    a: [number, number, number, number],
+    b: [number, number, number, number]
+): boolean {
+    return !(a[2] < b[0] || a[0] > b[2] || a[3] < b[1] || a[1] > b[3]);
+}
+
+// ============================================================================
+// Tile Logger
+// ============================================================================
+
+interface TileLog {
+    id: number; z: number; x: number; y: number;
+    status: number | null; ms: number; sizeKB: number | null;
+    ok: boolean; skipped: boolean; url: string;
+}
+
+class TileLogger {
+    logs: TileLog[] = [];
+    private _id = 0;
+    stats = { total: 0, loaded: 0, failed: 0, skipped: 0 };
+
+    add(z: number, x: number, y: number, url: string, status: number | null, ok: boolean, ms: number, size?: number, skipped = false) {
+        const entry: TileLog = {
+            id: ++this._id, z, x, y, status, ok, skipped,
+            ms: Math.round(ms),
+            sizeKB: size != null ? Math.round(size / 1024 * 10) / 10 : null,
+            url,
+        };
+        this.logs.push(entry);
+        this.stats.total++;
+        if (skipped) this.stats.skipped++;
+        else if (ok) this.stats.loaded++;
+        else this.stats.failed++;
+
+        if (skipped) return;
+
+        const icon = ok ? '✅' : '❌';
+        const dc = ms > 1500 ? '#ef4444' : ms > 500 ? '#f59e0b' : '#10b981';
+        console.log(
+            `%c${icon} tile z=${z} x=${x} y=${y} %c${ms}ms %c${status} ${entry.sizeKB ?? '?'}KB`,
+            'font-size:10px;color:#6b7280',
+            `font-size:10px;font-weight:bold;color:${dc}`,
+            `font-size:10px;color:${ok ? '#10b981' : '#ef4444'}`
+        );
     }
 
-    end(label: string): number {
-        const startTime = this.timers.get(label);
-        if (!startTime) return 0;
-        
-        const duration = performance.now() - startTime;
-        this.results.set(label, duration);
-        this.timers.delete(label);
-        return duration;
+    reset() { this.logs = []; this._id = 0; this.stats = { total: 0, loaded: 0, failed: 0, skipped: 0 }; }
+
+    print() {
+        console.table(this.logs.filter(l => !l.skipped).map(l => ({
+            '#': l.id, z: l.z, x: l.x, y: l.y,
+            status: l.status, ms: l.ms, KB: l.sizeKB, ok: l.ok ? '✅' : '❌'
+        })));
     }
 
-    log(label: string, emoji: string = '🕐') {
-        const duration = this.results.get(label);
-        if (duration !== undefined) {
-            const color = duration > 2000 ? '#ef4444' : duration > 1000 ? '#f59e0b' : '#10b981';
-            console.log(
-                `%c${emoji} ${label}: ${duration.toFixed(0)}ms`,
-                `color: ${color}; font-weight: bold;`
-            );
+    printStats() {
+        const { total, loaded, failed, skipped } = this.stats;
+        const durations = this.logs.filter(l => l.ok && !l.skipped).map(l => l.ms);
+        const avg = durations.length ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : 0;
+        const max = durations.length ? Math.max(...durations) : 0;
+        const totalKB = Math.round(this.logs.reduce((s, l) => s + (l.sizeKB || 0), 0));
+
+        const byZoom: Record<number, { count: number; avg: number; failed: number; skipped: number }> = {};
+        for (const l of this.logs) {
+            if (!byZoom[l.z]) byZoom[l.z] = { count: 0, avg: 0, failed: 0, skipped: 0 };
+            byZoom[l.z].count++;
+            if (l.skipped) byZoom[l.z].skipped++;
+            else if (!l.ok) byZoom[l.z].failed++;
         }
+        for (const z in byZoom) {
+            const zLogs = this.logs.filter(l => l.z === +z && l.ok && !l.skipped);
+            byZoom[+z].avg = zLogs.length ? Math.round(zLogs.reduce((s, l) => s + l.ms, 0) / zLogs.length) : 0;
+        }
+
+        console.log('%c═══ Tile Stats ═══', 'color:#6366f1;font-weight:bold');
+        console.log(`Total: ${total} | ✅ ${loaded} | ❌ ${failed} | ⏭️ ${skipped} skipped | Avg: ${avg}ms | Max: ${max}ms | ${totalKB}KB`);
+        if (Object.keys(byZoom).length > 0) console.table(byZoom);
     }
 
-    printSummary() {
-        console.log('%c📊 PERFORMANCE SUMMARY:', 'color: #6366f1; font-weight: bold; font-size: 14px;');
-        this.results.forEach((duration, label) => {
-            const color = duration > 2000 ? '#ef4444' : duration > 1000 ? '#f59e0b' : '#10b981';
-            console.log(`   %c${label}: ${duration.toFixed(0)}ms`, `color: ${color};`);
-        });
-        
-        const infoTime = this.results.get('INFO_API') || 0;
-        const statsTime = this.results.get('STATISTICS_API') || this.results.get('STATISTICS_CACHE') || 0;
-        const totalSetup = this.results.get('TOTAL_SETUP') || 0;
-        const isCached = this.results.has('STATISTICS_CACHE');
-        
-        if (infoTime > 2000 || statsTime > 2000) {
-            console.log(
-                '%c⚠️ BACKEND YAVAŞLIĞI AŞKARLANDI!',
-                'color: #ef4444; font-weight: bold; font-size: 14px;'
-            );
-            if (infoTime > 2000) {
-                console.log(`   TiTiler /info endpoint: ${infoTime.toFixed(0)}ms (>2s)`);
-            }
-            if (statsTime > 2000 && !isCached) {
-                console.log(`   TiTiler /statistics endpoint: ${statsTime.toFixed(0)}ms (>2s)`);
-            }
-        }
-        
-        console.log(`%c📦 Total setup time: ${totalSetup.toFixed(0)}ms`, 'color: #6366f1; font-weight: bold;');
-        
-        if (isCached) {
-            console.log('%c⚡ CACHE SPEEDUP ACHIEVED!', 'color: #52c41a; font-weight: bold;');
-        }
-    }
-
-    reset() {
-        this.timers.clear();
-        this.results.clear();
+    toJSON() { return JSON.stringify({ stats: this.stats, logs: this.logs }, null, 2); }
+    async copy() { await navigator.clipboard.writeText(this.toJSON()); console.log('%c📋 Copied!', 'color:#10b981;font-weight:bold'); }
+    download() {
+        const blob = new Blob([this.toJSON()], { type: 'application/json' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+        a.download = `tile-log-${Date.now()}.json`; a.click();
     }
 }
+
+const tileLogger = new TileLogger();
+if (typeof window !== 'undefined') (window as any).TiTilerLog = tileLogger;
 
 // ============================================================================
 // COG URL Extractor
@@ -115,161 +145,171 @@ function extractCogUrl(item: StacItem): string | null {
     if (item.assets && typeof item.assets === 'object') {
         for (const [key, value] of Object.entries(item.assets)) {
             const asset = value as any;
-            
             let href = asset?.href || asset?.Href || asset?.url || asset?.URL;
             let type = asset?.type || asset?.Type || '';
-            
-            if (typeof asset === 'string') {
-                href = asset;
-            }
+            if (typeof asset === 'string') href = asset;
 
             if (href && typeof href === 'string') {
-                const isCogLike = 
-                    href.endsWith('.tif') ||
-                    href.endsWith('.tiff') ||
-                    href.endsWith('.cog') ||
-                    href.includes('.tif?') ||
-                    href.startsWith('s3://') ||
-                    href.includes('raster-files') ||
-                    href.includes('/cog/') ||
-                    (type && (
-                        type.includes('geotiff') ||
-                        type.includes('image/tiff') ||
-                        type.includes('cloud-optimized')
-                    ));
+                const isCogLike =
+                    href.endsWith('.tif') || href.endsWith('.tiff') || href.endsWith('.cog') ||
+                    href.includes('.tif?') || href.startsWith('s3://') ||
+                    href.includes('raster-files') || href.includes('/cog/') ||
+                    (type && (type.includes('geotiff') || type.includes('image/tiff') || type.includes('cloud-optimized')));
+                const isStacApiUrl = href.includes('/collections/') || href.includes('/items/') || href.includes('/search');
 
-                const isStacApiUrl = 
-                    href.includes('/collections/') ||
-                    href.includes('/items/') ||
-                    href.includes('/search');
-
-                if (isCogLike || (!isStacApiUrl && key === 'data')) {
-                    return href;
-                }
+                if (isCogLike || (!isStacApiUrl && key === 'data')) return href;
             }
         }
     }
-
-    if (item.links && Array.isArray(item.links)) {
-        for (const link of item.links) {
-            const href = link.href || (link as any).url;
-            if (href && typeof href === 'string') {
-                if (
-                    link.rel === 'data' ||
-                    link.rel === 'enclosure' ||
-                    link.rel === 'alternate' ||
-                    href.endsWith('.tif') ||
-                    href.startsWith('s3://')
-                ) {
-                    return href;
-                }
-            }
-        }
-    }
-
-    if (item.properties) {
-        const props = item.properties as any;
-        const urlFields = ['cog_url', 'cogUrl', 'data_url', 'file_url', 'asset_url', 'href', 'url', 's3_path'];
-        
-        for (const field of urlFields) {
-            if (props[field] && typeof props[field] === 'string') {
-                return props[field];
-            }
-        }
-    }
-
     return null;
 }
 
 // ============================================================================
-// Diagnostic Logger
+// Smart TileLayer — Bbox filtr + Queue + AbortController
 // ============================================================================
 
-class DiagnosticLogger {
-    private stats = { total: 0, loaded: 0, failed: 0 };
-
-    reset() {
-        this.stats = { total: 0, loaded: 0, failed: 0 };
-    }
-
-    logTileRequest() { this.stats.total++; }
-    logTileSuccess() { this.stats.loaded++; }
-    logTileFailed() { this.stats.failed++; }
-
-    printSummary() {
-        const rate = this.stats.total > 0 ? ((this.stats.loaded / this.stats.total) * 100).toFixed(0) : '0';
-        console.log(
-            `%c🖼️ TILES: ${this.stats.loaded}/${this.stats.total} (${rate}%) | Failed: ${this.stats.failed}`,
-            this.stats.failed > 0 ? 'color: #f59e0b;' : 'color: #10b981;'
-        );
-    }
-}
-
-const logger = new DiagnosticLogger();
-
-// ============================================================================
-// Custom TileLayer with Queue
-// ============================================================================
-
-const createQueuedTileLayer = (tileUrl: string, options: L.TileLayerOptions = {}) => {
-    const queue: QueuedTile[] = [];
+function createSmartTileLayer(
+    tileUrl: string,
+    options: L.TileLayerOptions = {},
+    rasterBbox?: [number, number, number, number]
+) {
+    let currentController = new AbortController();
     let activeRequests = 0;
+    let queuedCount = 0;
 
-    const processQueue = () => {
-        while (queue.length > 0 && activeRequests < MAX_CONCURRENT_REQUESTS) {
-            const item = queue.shift();
-            if (item) {
-                activeRequests++;
-                loadTile(item);
-            }
+    // Queue: fetch gözləyən tile-lar
+    const queue: Array<() => void> = [];
+
+    // ✅ MEMORY: Bütün blob URL-ləri izlə
+    const activeBlobUrls = new Set<string>();
+
+    function revokeAllBlobs() {
+        for (const url of activeBlobUrls) {
+            URL.revokeObjectURL(url);
         }
-    };
+        activeBlobUrls.clear();
+    }
 
-    const loadTile = (item: QueuedTile) => {
-        const { coords, tile, done } = item;
-        const url = tileUrl
-            .replace('{z}', String(coords.z))
-            .replace('{x}', String(coords.x))
-            .replace('{y}', String(coords.y));
+    function processQueue() {
+        while (queue.length > 0 && activeRequests < MAX_CONCURRENT) {
+            const next = queue.shift();
+            if (next) next();
+        }
+    }
 
-        logger.logTileRequest();
-
-        fetch(url)
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
-                return response.blob();
-            })
-            .then(blob => {
-                tile.src = URL.createObjectURL(blob);
-                logger.logTileSuccess();
-                done(undefined, tile);
-                activeRequests--;
-                processQueue();
-            })
-            .catch(() => {
-                logger.logTileFailed();
-                tile.src = TRANSPARENT_TILE;
-                done(undefined, tile);
-                activeRequests--;
-                processQueue();
-            });
-    };
-
-    const QueuedTileLayerClass = L.TileLayer.extend({
-        createTile: function(this: L.TileLayer, coords: L.Coords, done: L.DoneCallback): HTMLImageElement {
+    const SmartTileLayer = L.TileLayer.extend({
+        createTile(this: any, coords: L.Coords, done: L.DoneCallback): HTMLImageElement {
             const tile = document.createElement('img');
             tile.alt = '';
             tile.setAttribute('role', 'presentation');
-            queue.push({ coords, tile, done, retryCount: 0 });
-            processQueue();
+
+            // ✅ BBOX FİLTR
+            if (rasterBbox) {
+                const tileBounds = tileToBounds(coords.z, coords.x, coords.y);
+                if (!bboxIntersects(tileBounds, rasterBbox)) {
+                    tileLogger.add(coords.z, coords.x, coords.y, '', null, true, 0, 0, true);
+                    tile.src = TRANSPARENT_TILE;
+                    done(undefined, tile);
+                    return tile;
+                }
+            }
+
+            // ✅ QUEUE LİMİT — çox tile queue-da gözləyirsə, skip et
+            if (queuedCount >= MAX_QUEUE) {
+                tile.src = TRANSPARENT_TILE;
+                done(undefined, tile);
+                return tile;
+            }
+
+            const url = tileUrl
+                .replace('{z}', String(coords.z))
+                .replace('{x}', String(coords.x))
+                .replace('{y}', String(coords.y));
+
+            const signal = currentController.signal;
+            const t0 = performance.now();
+
+            const doFetch = () => {
+                if (signal.aborted) {
+                    queuedCount--;
+                    tile.src = TRANSPARENT_TILE;
+                    done(undefined, tile);
+                    return;
+                }
+
+                activeRequests++;
+                queuedCount--;
+
+                fetch(url, { signal })
+                    .then(r => {
+                        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                        return r.blob().then(b => ({ b, s: r.status }));
+                    })
+                    .then(({ b, s }) => {
+                        tileLogger.add(coords.z, coords.x, coords.y, url, s, true, performance.now() - t0, b.size);
+                        const blobUrl = URL.createObjectURL(b);
+                        activeBlobUrls.add(blobUrl);  // ✅ izlə
+                        tile.src = blobUrl;
+                        done(undefined, tile);
+                    })
+                    .catch(err => {
+                        if (err.name !== 'AbortError') {
+                            tileLogger.add(coords.z, coords.x, coords.y, url, 0, false, performance.now() - t0);
+                        }
+                        tile.src = TRANSPARENT_TILE;
+                        done(undefined, tile);
+                    })
+                    .finally(() => {
+                        activeRequests--;
+                        processQueue();
+                    });
+            };
+
+            // Queue-ya əlavə et
+            queuedCount++;
+            if (activeRequests < MAX_CONCURRENT) {
+                doFetch();
+            } else {
+                queue.push(doFetch);
+            }
+
             return tile;
+        },
+
+        _onZoomChange(this: any) {
+            currentController.abort();
+            currentController = new AbortController();
+            queue.length = 0;
+            activeRequests = 0;
+            queuedCount = 0;
+        },
+
+        onAdd(this: any, map: L.Map) {
+            map.on('zoomstart', this._onZoomChange, this);
+
+            // ✅ MEMORY: tile DOM-dan çıxanda blob URL sil
+            this.on('tileunload', function (e: any) {
+                const img = e.tile as HTMLImageElement;
+                if (img && img.src && img.src.startsWith('blob:')) {
+                    activeBlobUrls.delete(img.src);
+                    URL.revokeObjectURL(img.src);
+                }
+            });
+
+            return L.TileLayer.prototype.onAdd.call(this, map);
+        },
+
+        onRemove(this: any, map: L.Map) {
+            map.off('zoomstart', this._onZoomChange, this);
+            currentController.abort();
+            queue.length = 0;
+            revokeAllBlobs();  // ✅ layer silindikdə hamısını təmizlə
+            return L.TileLayer.prototype.onRemove.call(this, map);
         }
     }) as new (url: string, options?: L.TileLayerOptions) => L.TileLayer;
 
-    return new QueuedTileLayerClass(tileUrl, options);
-};
+    return new SmartTileLayer(tileUrl, options);
+}
 
 // ============================================================================
 // React Component
@@ -278,182 +318,118 @@ const createQueuedTileLayer = (tileUrl: string, options: L.TileLayerOptions = {}
 const RasterTileLayer: React.FC<RasterTileLayerProps> = ({ item, opacity = 0.9 }) => {
     const map = useMap();
     const layerRef = useRef<L.TileLayer | null>(null);
-    const [, setLoading] = useState(true);
-    const [, setError] = useState<string | null>(null);
-    const timerRef = useRef(new PerformanceTimer());
+    const mountedRef = useRef(true);
+
+    const removeLayer = () => {
+        if (layerRef.current) { map.removeLayer(layerRef.current); layerRef.current = null; }
+    };
 
     useEffect(() => {
         if (!item) return;
+        mountedRef.current = true;
 
         const loadLayer = async () => {
-            setLoading(true);
-            setError(null);
-            logger.reset();
-            timerRef.current.reset();
-            timerRef.current.start('TOTAL_SETUP');
+            removeLayer();
+            tileLogger.reset();
 
-            console.log(
-                '%c🗺️ RASTER LAYER LOADING',
-                'color: #10b981; font-weight: bold; font-size: 14px;',
-                '\n   Item:', item.id
-            );
+            console.log('%c🗺️ RASTER LAYER LOADING', 'color: #10b981; font-weight: bold; font-size: 14px;', '\n   Item:', item.id);
 
             try {
-                timerRef.current.start('COG_URL_EXTRACTION');
+                const t0 = performance.now();
+
+                // 1) COG URL
                 const cogUrl = extractCogUrl(item);
-                timerRef.current.end('COG_URL_EXTRACTION');
-
-                if (!cogUrl) {
-                    throw new Error(`COG URL tapılmadı! Item ID: ${item.id}`);
-                }
-
-                if (cogUrl.includes('/collections/') || cogUrl.includes('/items/')) {
-                    throw new Error(`Bu STAC metadata URL-dir, COG fayl deyil: ${cogUrl}`);
-                }
-
+                if (!cogUrl) throw new Error(`COG URL tapılmadı! Item ID: ${item.id}`);
                 console.log('%c📦 COG URL:', 'color: #10b981;', cogUrl);
 
-                // ==========================================
-                // ✅ CACHE FIRST, THEN API FALLBACK
-                // ==========================================
-                
-                // INFO API
-                timerRef.current.start('INFO_API');
-                console.log('📊 TiTiler /info sorğusu başladı...');
+                // 2) /info
+                const infoStart = performance.now();
                 const info = await TitilerService.getInfo(cogUrl);
-                const infoTime = timerRef.current.end('INFO_API');
-                timerRef.current.log('INFO_API', '📊');
+                const infoMs = Math.round(performance.now() - infoStart);
+                if (!mountedRef.current) return;
 
-                // STATISTICS - Try cache first
-                let statistics: any;
-                let statsTime = 0;
-                const cached = getCachedStatistics(cogUrl);
-                
-                if (cached) {
-                    timerRef.current.start('STATISTICS_CACHE');
-                    statistics = cached;
-                    statsTime = timerRef.current.end('STATISTICS_CACHE');
-                    console.log(
-                        '%c⚡ Statistics CACHE HIT! ' + statsTime.toFixed(2) + 'ms (100000x faster than API!)',
-                        'color: #52c41a; font-weight: bold; font-size: 13px;'
-                    );
+                // 3) Rescale — DB API-dən
+                const rescaleStart = performance.now();
+                const bands = await fetchRescale(cogUrl);
+                const rescaleMs = Math.round(performance.now() - rescaleStart);
+                if (!mountedRef.current) return;
+
+                let rescale: string[];
+                let rescaleSource: string;
+
+                if (bands.length > 0) {
+                    const bidx = TitilerService.getBandIndexes(info);
+                    rescale = toRescaleStrings(bands, bidx.length);
+                    rescaleSource = 'DB API';
                 } else {
-                    timerRef.current.start('STATISTICS_API');
-                    console.log('📈 TiTiler /statistics sorğusu başladı (cache miss)...');
-                    statistics = await TitilerService.getStatistics(cogUrl);
-                    statsTime = timerRef.current.end('STATISTICS_API');
-                    timerRef.current.log('STATISTICS_API', '📈');
-                    
-                    console.warn(
-                        '%c⚠️ Cache miss! Consider adding this file to statistics.cache.ts',
-                        'color: #f59e0b; font-weight: bold;'
-                    );
+                    console.log('%c⚠️ DB-də rescale yoxdur, TiTiler fallback...', 'color: #f59e0b;');
+                    const statistics = await TitilerService.getStatistics(cogUrl);
+                    const bidx = TitilerService.getBandIndexes(info);
+                    rescale = TitilerService.calculateRescale(statistics, bidx.length);
+                    rescaleSource = 'TiTiler fallback';
                 }
 
-                console.log(
-                    '%c✅ TiTiler sorğuları tamamlandı',
-                    'color: #10b981; font-weight: bold;',
-                    `\n   /info: ${infoTime.toFixed(0)}ms`,
-                    `\n   /statistics: ${statsTime.toFixed(0)}ms ${cached ? '(cache ⚡)' : '(API)'}`,
-                    `\n   Total: ${(infoTime + statsTime).toFixed(0)}ms`
-                );
+                console.log(`%c🎨 Rescale (${rescaleSource}, ${rescaleMs}ms):`, 'color: #6366f1;', rescale);
 
-                const stacBbox = item.bbox;
-
-                // Band indexes
-                timerRef.current.start('TILE_URL_BUILD');
+                // 4) Tile URL
                 const bidx = TitilerService.getBandIndexes(info);
-
-                // ✅ REAL RESCALE from statistics (cache or API)
-                const rescale = TitilerService.calculateRescale(statistics, bidx.length);
-                
-                console.log(
-                    '%c✅ Real rescale values from statistics:',
-                    'color: #52c41a; font-weight: bold;',
-                    rescale
-                );
-
-                // Tile URL
                 const tileUrl = TitilerService.buildTileUrl(cogUrl, {
                     format: 'png',
                     bidx,
                     rescale,
                 });
-                timerRef.current.end('TILE_URL_BUILD');
 
-                if (layerRef.current) {
-                    map.removeLayer(layerRef.current);
-                }
+                // 5) Raster bbox
+                const stacBbox = item.bbox as [number, number, number, number] | undefined;
 
-                timerRef.current.start('LAYER_CREATE');
-                const [minLng, minLat, maxLng, maxLat] = stacBbox;
-                const layer = createQueuedTileLayer(tileUrl, {
+                // 6) Layer
+                const layer = createSmartTileLayer(tileUrl, {
                     opacity,
-                    maxZoom: info.maxzoom || 18,
-                    minZoom: info.minzoom || 0,
+                    minZoom: 0,
+                    maxZoom: 22,
+                    minNativeZoom: info.minzoom || 0,
+                    maxNativeZoom: info.maxzoom || 18,
                     tileSize: 256,
                     crossOrigin: 'anonymous',
-                    bounds: L.latLngBounds(
-                        [minLat, minLng],
-                        [maxLat, maxLng]
-                    ),
                     zIndex: 1000,
                     pane: 'overlayPane',
-                });
+                    errorTileUrl: TRANSPARENT_TILE,
+                }, stacBbox);
 
-                layer.on('load', () => {
-                    console.log('✅ Layer tiles loaded');
-                    logger.printSummary();
-                });
+                if (!mountedRef.current) return;
 
                 layer.addTo(map);
                 layerRef.current = layer;
-                timerRef.current.end('LAYER_CREATE');
 
-                timerRef.current.start('FIT_BOUNDS');
+                // Fit bounds
                 if (stacBbox && stacBbox.length === 4) {
-                    const leafletBounds: L.LatLngBoundsExpression = [
-                        [minLat, minLng],
-                        [maxLat, maxLng]
-                    ];
-                    map.fitBounds(leafletBounds, { padding: [50, 50], maxZoom: 12 });
+                    const [minLng, minLat, maxLng, maxLat] = stacBbox;
+                    map.fitBounds([[minLat, minLng], [maxLat, maxLng]], { padding: [50, 50], maxZoom: 16 });
                 }
-                timerRef.current.end('FIT_BOUNDS');
 
-                timerRef.current.end('TOTAL_SETUP');
-                setLoading(false);
-                
-                console.log('%c' + '═'.repeat(50), 'color: #6366f1;');
-                timerRef.current.printSummary();
-                console.log('%c' + '═'.repeat(50), 'color: #6366f1;');
+                const totalMs = Math.round(performance.now() - t0);
+                console.log(
+                    '%c✅ Layer hazırdır!', 'color: #10b981; font-weight: bold; font-size: 14px;',
+                    `\n   /info: ${infoMs}ms`,
+                    `\n   rescale: ${rescaleMs}ms (${rescaleSource})`,
+                    `\n   bbox filter: ${stacBbox ? 'ON ✅' : 'OFF ⚠️'}`,
+                    `\n   Total: ${totalMs}ms`
+                );
 
             } catch (err: any) {
-                timerRef.current.end('TOTAL_SETUP');
                 console.error('%c❌ LAYER ERROR:', 'color: #ef4444; font-weight: bold;', err.message);
-                setError(err.message);
-                setLoading(false);
             }
         };
 
         loadLayer();
-
-        return () => {
-            if (layerRef.current) {
-                map.removeLayer(layerRef.current);
-                layerRef.current = null;
-            }
-            logger.printSummary();
-        };
-    }, [item, map, opacity]);
+        return () => { mountedRef.current = false; removeLayer(); tileLogger.printStats(); };
+    }, [item, map]);
 
     useEffect(() => {
-        if (layerRef.current) {
-            layerRef.current.setOpacity(opacity);
-        }
+        if (layerRef.current) layerRef.current.setOpacity(opacity);
     }, [opacity]);
 
     return null;
 };
 
 export default RasterTileLayer;
-

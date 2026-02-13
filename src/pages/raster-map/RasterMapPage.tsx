@@ -33,22 +33,33 @@ export default function RasterMapPage() {
     const [collapsed, setCollapsed] = useState(false);
     const [filters, setFilters] = useState<RasterFilterParams>(defaultFilters);
     const [isDrawingBbox, setIsDrawingBbox] = useState(false);
-    
-    // Data states
     const [collections, setCollections] = useState<StacCollection[]>([]);
     const [results, setResults] = useState<StacItem[]>([]);
     const [selectedItem, setSelectedItem] = useState<StacItem | null>(null);
-    
-    // Loading states
     const [loading, setLoading] = useState(false);
     const [collectionsLoading, setCollectionsLoading] = useState(false);
-    
-    // Stats
     const [totalMatched, setTotalMatched] = useState(0);
+    
+    const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // Debounce ref for auto search
-    const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
+    useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = `
+        .leaflet-tile {
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            outline: none !important;
+        }
+        .leaflet-tile-container img {
+            outline: none !important;
+        }
+        .leaflet-tile-pane {
+            will-change: transform;
+        }
+    `;
+    document.head.appendChild(style);
+    return () => { document.head.removeChild(style); };
+}, []);
     // Fetch collections on mount
     useEffect(() => {
         const fetchCollections = async () => {

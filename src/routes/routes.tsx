@@ -7,6 +7,9 @@ import PipelineUploader from "../pages/pipeline/parts/PipelineUploader"
 import RastersPage from "../pages/raster/RastersPage";
 import RasterUploader from "../pages/raster/RasterUploader";
 import RasterMapPage from "../pages/raster-map/RasterMapPage";
+import SpatialAnalyses from "../pages/analysis/SpatialAnalysesPage";
+import SpatialTemplateBuilder from "../pages/analysis/components/SpatialAnalysisForm";
+
 export const privateRoutes = [
     { path: `/`, element: <DashboardPage />, permission: '*' },
     { path: `/pipelines`, element: <PipelinesPage />, permission: '*' },
@@ -16,6 +19,8 @@ export const privateRoutes = [
     { path: `/rasters`, element: <RastersPage />, permission: '*' },
     { path: `/rasters/new`, element: <RasterUploader />, permission: '*' },
     { path: `/raster-map`, element: <RasterMapPage />, permission: '*' },
+    { path: `/spatial-analyses`, element: <SpatialAnalyses />, permission: '*' },
+    { path: `/spatial-analyses/:id/details`, element: <SpatialTemplateBuilder />, permission: '*' },
     { path: `/*`, element: <NotFound />, permission: '*' },
 ];
 

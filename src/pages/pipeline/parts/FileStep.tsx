@@ -47,13 +47,13 @@ const FileStep: React.FC<FileStepProps> = ({
         setAnalysisComplete(false);
 
         try {
+            const analyze = await analyzeShapefile(file);
+
             const response = await FileService.getVectorFilePresignedUrl({
                 organizationName: organizationName || "default",
                 fileName: file.name
             });
-
             await MinIOService.upload(response.data.url, file);
-            const analyze = await analyzeShapefile(file);
 
             form.setFieldsValue({
                 name: 'AUTO',
@@ -162,14 +162,14 @@ const FileStep: React.FC<FileStepProps> = ({
                                 <ShapeMap
                                     key={fileList[0]?.uid}
                                     file={fileList[0]?.originFileObj}
-                                    maxFeatures={1000}
+                                    maxFeatures={10}
                                     isFocus={true}
                                 />
                             </div>
                         </Col>
 
                         <Col xs={24} lg={10}>
-                            <Title level={5} style={{ marginBottom: 16 }}>
+                            <Title level={5} style={{ marginBottom: 16 } }>
                                 <InfoCircleOutlined /> Avtomatik Analiz Nəticəsi
                             </Title>
 

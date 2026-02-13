@@ -28,7 +28,7 @@ export default defineConfig({
       },
       // ✅ TiTiler proxy - CORS problemini həll edir
       '/titiler-api': {
-  target: 'https://tiles.mmdev.az',
+  target: 'http://tiles.mmdev.az',
   changeOrigin: true,
   secure: false,
   rewrite: (path) => path.replace(/^\/titiler-api/, '/tiles')

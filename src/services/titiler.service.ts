@@ -2,23 +2,15 @@
  * TiTiler Service
  * 
  * COG (Cloud Optimized GeoTIFF) faylları üçün tile və metadata servisi.
- * Vite proxy vasitəsilə TiTiler backend-ə qoşulur.
  * 
- * Development: /titiler-api → https://tiles.mmdev.az/tiles
- * Production:  https://tiles.mmdev.az/tiles
+ * ⚠️ Logger: titiler.logger.ts import edildikdə fetch interceptor
+ *    avtomatik bütün sorğuları tutur. Bu faylda dəyişiklik lazım deyil.
  */
 
-// ============================================================================
-// Configuration
-// ============================================================================
-
-// Development-də Vite proxy istifadə edirik
-// Production-da birbaşa TiTiler URL
 const TITILER_BASE_URL = import.meta.env.DEV 
-    ? '/titiler-api'           // Vite proxy: /titiler-api → https://tiles.mmdev.az/tiles
+    ? '/titiler-api'
     : 'https://tiles.mmdev.az/tiles';
 
-// COG endpoint path
 const COG_PATH = '/cog';
 
 // ============================================================================
@@ -26,7 +18,7 @@ const COG_PATH = '/cog';
 // ============================================================================
 
 export interface CogInfo {
-    bounds: [number, number, number, number];  // [minLng, minLat, maxLng, maxLat]
+    bounds: [number, number, number, number];
     minzoom: number;
     maxzoom: number;
     band_metadata: Array<[string, Record<string, any>]>;
@@ -60,6 +52,9 @@ export interface TileUrlOptions {
     rescale?: string[];
     colormap?: string;
     nodata?: number;
+    resampling?: 'nearest' | 'bilinear' | 'cubic' | 'cubic_spline' | 'lanczos';
+    buffer?: number;
+    tileScale?: 1 | 2 | 4;
 }
 
 // ============================================================================
@@ -67,180 +62,87 @@ export interface TileUrlOptions {
 // ============================================================================
 
 export const TitilerService = {
-    /**
-     * COG haqqında metadata al
-     */
     getInfo: async (cogUrl: string): Promise<CogInfo> => {
         const url = `${TITILER_BASE_URL}${COG_PATH}/info?url=${encodeURIComponent(cogUrl)}`;
-        console.log('📊 TiTiler info request:', url);
-        
         const response = await fetch(url);
-        
         if (!response.ok) {
             const text = await response.text();
-            console.error('TiTiler info error:', response.status, text);
             throw new Error(`TiTiler info error: ${response.status} - ${text}`);
         }
-        
-        const data = await response.json();
-        console.log('✅ TiTiler info response:', data);
-        return data;
+        return response.json();
     },
 
-    /**
-     * COG bounds al (bbox)
-     */
     getBounds: async (cogUrl: string): Promise<[number, number, number, number]> => {
         const url = `${TITILER_BASE_URL}${COG_PATH}/bounds?url=${encodeURIComponent(cogUrl)}`;
-        console.log('📍 TiTiler bounds request:', url);
-        
         const response = await fetch(url);
-        
-        if (!response.ok) {
-            throw new Error(`TiTiler bounds error: ${response.status}`);
-        }
-        
+        if (!response.ok) throw new Error(`TiTiler bounds error: ${response.status}`);
         const data = await response.json();
         return data.bounds;
     },
 
-    /**
-     * COG statistikası al
-     */
     getStatistics: async (cogUrl: string): Promise<CogStatistics> => {
         const url = `${TITILER_BASE_URL}${COG_PATH}/statistics?url=${encodeURIComponent(cogUrl)}`;
-        console.log('📈 TiTiler statistics request:', url);
-        
         const response = await fetch(url);
-        
-        if (!response.ok) {
-            const text = await response.text();
-            console.error('TiTiler statistics error:', response.status, text);
-            throw new Error(`TiTiler statistics error: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        console.log('✅ TiTiler statistics response:', data);
-        return data;
+        if (!response.ok) throw new Error(`TiTiler statistics error: ${response.status}`);
+        return response.json();
     },
 
-    /**
-     * Preview URL yarat
-     */
     getPreviewUrl: (cogUrl: string, options: TileUrlOptions = {}): string => {
         const params = new URLSearchParams();
         params.append('url', cogUrl);
-        
-        // Default max_size
         params.append('max_size', '512');
-        
-        // Band indexes
-        if (options.bidx && options.bidx.length > 0) {
-            options.bidx.forEach(b => params.append('bidx', String(b)));
-        }
-        
-        // Rescale
-        if (options.rescale && options.rescale.length > 0) {
-            options.rescale.forEach(r => params.append('rescale', r));
-        }
-        
-        // Format
+        if (options.bidx?.length) options.bidx.forEach(b => params.append('bidx', String(b)));
+        if (options.rescale?.length) options.rescale.forEach(r => params.append('rescale', r));
         const format = options.format || 'png';
-        
         return `${TITILER_BASE_URL}${COG_PATH}/preview.${format}?${params.toString()}`;
     },
 
     /**
-     * Tile URL template yarat
-     * {z}/{x}/{y} placeholder-ları ilə
+     * Tile URL template — {z}/{x}/{y}
+     * 
+     * Keyfiyyət parametrləri:
+     *   @2x         → 512×512 tile (retina)
+     *   resampling  → bilinear (hamar) vs nearest (pikselləşmiş)
+     *   buffer      → kənar artefaktları azaldır
      */
-    buildTileUrl: (cogUrl: string, options: TileUrlOptions = {}): string => {
-        const params = new URLSearchParams();
-        params.append('url', cogUrl);
-        
-        // Band indexes
-        if (options.bidx && options.bidx.length > 0) {
-            options.bidx.forEach(b => params.append('bidx', String(b)));
-        }
-        
-        // Rescale
-        if (options.rescale && options.rescale.length > 0) {
-            options.rescale.forEach(r => params.append('rescale', r));
-        }
-        
-        // Colormap
-        if (options.colormap) {
-            params.append('colormap_name', options.colormap);
-        }
-        
-        // Format
-        const format = options.format || 'png';
-        
-        // TileMatrixSet - WebMercatorQuad standart
-        const tileUrl = `${TITILER_BASE_URL}${COG_PATH}/tiles/WebMercatorQuad/{z}/{x}/{y}@1x.${format}?${params.toString()}`;
-        
-        console.log('🔗 Tile URL template:', tileUrl.replace('{z}/{x}/{y}', '...'));
-        return tileUrl;
-    },
+   buildTileUrl: (cogUrl: string, options: TileUrlOptions = {}): string => {
+    const params = new URLSearchParams();
+    params.append('url', cogUrl);
+    if (options.bidx?.length) options.bidx.forEach(b => params.append('bidx', String(b)));
+    if (options.rescale?.length) options.rescale.forEach(r => params.append('rescale', r));
+    if (options.colormap) params.append('colormap_name', options.colormap);
 
-    /**
-     * Band indexes təyin et
-     * RGB üçün 1,2,3 və ya 1-band üçün [1]
-     */
+    params.append('resampling', 'bilinear');
+    // buffer SİLİNDİ — kənar tile-larda 404 yaradırdı
+
+    const format = options.format || 'png';
+    return `${TITILER_BASE_URL}${COG_PATH}/tiles/WebMercatorQuad/{z}/{x}/{y}.${format}?${params.toString()}`;
+    // @${scale}x SİLİNDİ — retina lazım deyil
+},
     getBandIndexes: (info: CogInfo): number[] => {
-        const bandCount = info.count || 1;
-        
-        // 3+ band varsa RGB
-        if (bandCount >= 3) {
-            return [1, 2, 3];
-        }
-        
-        // Tək band
-        return [1];
+        return (info.count || 1) >= 3 ? [1, 2, 3] : [1];
     },
 
-    /**
-     * Rescale dəyərləri hesabla
-     * Statistics-dən percentile_2 və percentile_98 istifadə edir
-     */
     calculateRescale: (statistics: CogStatistics, bandCount: number = 3): string[] => {
         const rescale: string[] = [];
-        
         for (let i = 1; i <= bandCount; i++) {
-            const bandKey = `b${i}`;
-            const bandStats = statistics[bandKey];
-            
-            if (bandStats) {
-                const low = Math.floor(bandStats.percentile_2 || bandStats.min || 0);
-                const high = Math.ceil(bandStats.percentile_98 || bandStats.max || 255);
-                rescale.push(`${low},${high}`);
+            const bs = statistics[`b${i}`];
+            if (bs) {
+                rescale.push(`${Math.floor(bs.percentile_2 || bs.min || 0)},${Math.ceil(bs.percentile_98 || bs.max || 255)}`);
             } else {
-                // Default rescale
                 rescale.push('0,255');
             }
         }
-        
         return rescale;
     },
 
-    /**
-     * Tek tile yüklə (test üçün)
-     */
     fetchTile: async (cogUrl: string, z: number, x: number, y: number, options: TileUrlOptions = {}): Promise<Blob> => {
-        const tileUrlTemplate = TitilerService.buildTileUrl(cogUrl, options);
-        const tileUrl = tileUrlTemplate
+        const tileUrl = TitilerService.buildTileUrl(cogUrl, options)
             .replace('{z}', String(z))
             .replace('{x}', String(x))
             .replace('{y}', String(y));
-        
-        console.log('🖼️ Fetching tile:', tileUrl);
-        
         const response = await fetch(tileUrl);
-        
-        if (!response.ok) {
-            throw new Error(`Tile fetch error: ${response.status}`);
-        }
-        
+        if (!response.ok) throw new Error(`Tile fetch error: ${response.status}`);
         return response.blob();
     }
 };

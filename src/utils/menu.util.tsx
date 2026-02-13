@@ -4,22 +4,27 @@ import { GlobalOutlined } from "@ant-design/icons";
 export const menus: MenuItem[] = [
     {
         label: "Dashboard",
-        icon: <BarChartOutlined  />, 
+        icon: <BarChartOutlined />,
         path: "/"
     },
     {
-    label: 'Raster Map',
-    icon: <GlobalOutlined />,
-    path: '/raster-map',
-    },
-    {
         label: "Pipelines",
-        icon: <ProfileOutlined   />, 
+        icon: <ProfileOutlined />,
         path: "/pipelines"
     },
     {
         label: 'Rasters',
         icon: <FileImageOutlined />,
         path: '/rasters',
+    },
+    {
+        label: 'Map',
+        icon: <GlobalOutlined />,
+        path: '/raster-map',
+    },
+    {
+        label: 'Spatial Analyses',
+        icon: <GlobalOutlined />,
+        path: '/spatial-analyses',
     },
 ];

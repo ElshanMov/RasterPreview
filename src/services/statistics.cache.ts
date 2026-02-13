@@ -1,258 +1,114 @@
-// src/services/statisticsCache.ts
-
 /**
- * Pre-computed statistics cache for raster files
- * Eliminates 5-50s API calls by storing statistics locally
+ * Statistics Cache — API-based rescale
  * 
- * Generated: 2026-02-02
- * Source: TiTiler statistics endpoint responses
+ * FAYL YOLU: src/services/statistics.cache.ts
+ * 
+ * Axın:
+ *   1) Memory cache yoxla (0ms)
+ *   2) Cache miss → GET /raster-uploads/rescale?cogPath=xxx (~50ms)
+ *   3) Nəticəni memory cache-ə yaz
+ *   4) TiTiler /statistics heç vaxt çağırılmır
  */
 
-export interface BandStatistics {
-  min: number;
-  max: number;
-  mean: number;
-  percentile_2: number;
-  percentile_98: number;
+const API_BASE = import.meta.env.VITE_API_URL;
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export interface BandRescale {
+    band: number;
+    percentile2: number;
+    percentile98: number;
 }
 
-export interface RasterStatistics {
-  b1: BandStatistics;
-  b2: BandStatistics;
-  b3: BandStatistics;
-  b4?: BandStatistics; // Optional for 3-band images
+export interface RescaleResponse {
+    bands: BandRescale[];
 }
 
-export const PRECOMPUTED_STATISTICS: Record<string, RasterStatistics> = {
-  // 10254_16bit.tif - 16-bit, 4 bands
-  '10254_16bit': {
-    b1: {
-      min: 0,
-      max: 3147,
-      mean: 378.18,
-      percentile_2: 0,
-      percentile_98: 699
-    },
-    b2: {
-      min: 0,
-      max: 3411,
-      mean: 452.63,
-      percentile_2: 0,
-      percentile_98: 667
-    },
-    b3: {
-      min: 0,
-      max: 3469,
-      mean: 491.78,
-      percentile_2: 0,
-      percentile_98: 690
-    },
-    b4: {
-      min: 0,
-      max: 3213,
-      mean: 1253.67,
-      percentile_2: 0,
-      percentile_98: 2300
-    }
-  },
+// ============================================================================
+// Memory Cache
+// ============================================================================
 
-  // 10218_8bit.tif - 8-bit, 3 bands (RGB)
-  '10218_8bit': {
-    b1: {
-      min: 0,
-      max: 255,
-      mean: 71.12,
-      percentile_2: 0,
-      percentile_98: 138
-    },
-    b2: {
-      min: 0,
-      max: 255,
-      mean: 80.59,
-      percentile_2: 0,
-      percentile_98: 126
-    },
-    b3: {
-      min: 0,
-      max: 255,
-      mean: 86.21,
-      percentile_2: 0,
-      percentile_98: 125
-    }
-  },
+const RESCALE_CACHE = new Map<string, BandRescale[]>();
 
-  // 10120-cog-fixed.tif - 16-bit, 3 bands
-  '10120-cog-fixed': {
-    b1: {
-      min: 0,
-      max: 4282,
-      mean: 388.70,
-      percentile_2: 0,
-      percentile_98: 759
-    },
-    b2: {
-      min: 0,
-      max: 4277,
-      mean: 444.19,
-      percentile_2: 0,
-      percentile_98: 695
-    },
-    b3: {
-      min: 0,
-      max: 4190,
-      mean: 477.19,
-      percentile_2: 0,
-      percentile_98: 683
-    }
-  },
-
-  // 10025-to-cog.tif - 16-bit, 4 bands
-  '10025-to-cog': {
-    b1: {
-      min: 0,
-      max: 3292,
-      mean: 255.42,
-      percentile_2: 0,
-      percentile_98: 375
-    },
-    b2: {
-      min: 0,
-      max: 3371,
-      mean: 394.44,
-      percentile_2: 0,
-      percentile_98: 562
-    },
-    b3: {
-      min: 0,
-      max: 3354,
-      mean: 459.08,
-      percentile_2: 0,
-      percentile_98: 632
-    },
-    b4: {
-      min: 0,
-      max: 4095,
-      mean: 1498.04,
-      percentile_2: 0,
-      percentile_98: 2492
-    }
-  },
-
-  // 10016_16bit.tif - 16-bit, 4 bands
-  '10016_16bit': {
-    b1: {
-      min: 0,
-      max: 2502,
-      mean: 393.71,
-      percentile_2: 0,
-      percentile_98: 775
-    },
-    b2: {
-      min: 0,
-      max: 2476,
-      mean: 473.06,
-      percentile_2: 0,
-      percentile_98: 706
-    },
-    b3: {
-      min: 0,
-      max: 2421,
-      mean: 500.28,
-      percentile_2: 0,
-      percentile_98: 697
-    },
-    b4: {
-      min: 0,
-      max: 3243,
-      mean: 1494.71,
-      percentile_2: 0,
-      percentile_98: 2277
-    }
-  },
-
-  // 10009-cog-fixed.tif - 16-bit, 3 bands
-  '10009-cog-fixed': {
-    b1: {
-      min: 0,
-      max: 2550,
-      mean: 279.78,
-      percentile_2: 0,
-      percentile_98: 544
-    },
-    b2: {
-      min: 0,
-      max: 2485,
-      mean: 416.68,
-      percentile_2: 0,
-      percentile_98: 605
-    },
-    b3: {
-      min: 0,
-      max: 2371,
-      mean: 471.45,
-      percentile_2: 0,
-      percentile_98: 631
-    }
-  },
-
-  // 10003-to-cog.tif - 16-bit, 4 bands (duplicate of 10025)
-  '10003-to-cog': {
-    b1: {
-      min: 0,
-      max: 3292,
-      mean: 255.42,
-      percentile_2: 0,
-      percentile_98: 375
-    },
-    b2: {
-      min: 0,
-      max: 3371,
-      mean: 394.44,
-      percentile_2: 0,
-      percentile_98: 562
-    },
-    b3: {
-      min: 0,
-      max: 3354,
-      mean: 459.08,
-      percentile_2: 0,
-      percentile_98: 632
-    },
-    b4: {
-      min: 0,
-      max: 4095,
-      mean: 1498.04,
-      percentile_2: 0,
-      percentile_98: 2492
-    }
-  }
-};
+// ============================================================================
+// Functions
+// ============================================================================
 
 /**
- * Extract file name from S3 URL or file path
- * Examples:
- *   - "s3://bucket/path/10254_16bit/10254_16bit.tif" → "10254_16bit"
- *   - "10120-cog-fixed.tif" → "10120-cog-fixed"
+ * Cache-dən rescale dəyərlərini oxu (sync, 0ms)
  */
-export function extractFileName(path: string): string {
-  const fileName = path.split('/').pop()?.replace('.tif', '') || '';
-  return fileName;
+export function getCachedRescale(cogUrl: string): BandRescale[] | null {
+    return RESCALE_CACHE.get(cogUrl) ?? null;
 }
 
 /**
- * Get cached statistics for a file
- * @param path - S3 URL or file path
- * @returns Statistics object or null if not cached
+ * API-dən rescale dəyərlərini gətir + cache-ə yaz (async)
+ * 
+ * GET /api/v1/raster-uploads/rescale?cogPath=s3://bucket/path/file.tif
+ * Response: { bands: [{ band: 1, percentile2: 243, percentile98: 814 }, ...] }
  */
-export function getCachedStatistics(path: string): RasterStatistics | null {
-  const fileName = extractFileName(path);
-  return PRECOMPUTED_STATISTICS[fileName] || null;
+export async function fetchRescale(cogUrl: string): Promise<BandRescale[]> {
+    // 1) Memory cache
+    const cached = RESCALE_CACHE.get(cogUrl);
+    if (cached) {
+        console.log(`%c⚡ Rescale CACHE HIT`, 'color: #52c41a; font-weight: bold;');
+        return cached;
+    }
+
+    // 2) API call
+    const t0 = performance.now();
+    try {
+        const url = `${API_BASE}/api/v1/raster-uploads/rescale?cogPath=${encodeURIComponent(cogUrl)}`;
+        const response = await fetch(url);
+
+        if (!response.ok) {
+            console.warn(`⚠️ Rescale API ${response.status} — fallback istifadə olunacaq`);
+            return [];
+        }
+
+        const data: RescaleResponse = await response.json();
+        const ms = Math.round(performance.now() - t0);
+
+        // 3) Cache-ə yaz
+        RESCALE_CACHE.set(cogUrl, data.bands);
+
+        console.log(
+            `%c📊 Rescale API: ${ms}ms | ${data.bands.length} band`,
+            ms > 200 ? 'color: #f59e0b;' : 'color: #10b981; font-weight: bold;'
+        );
+
+        return data.bands;
+
+    } catch (error) {
+        console.error('❌ Rescale API xətası:', error);
+        return [];
+    }
 }
 
 /**
- * Check if statistics are available in cache
+ * BandRescale[] → rescale string array (TiTiler üçün)
+ * Məs: ["243,814", "338,782", "376,772"]
  */
-export function hasStatistics(path: string): boolean {
-  return getCachedStatistics(path) !== null;
+export function toRescaleStrings(bands: BandRescale[], bandCount: number): string[] {
+    const rescales: string[] = [];
+
+    for (let i = 0; i < Math.min(bandCount, 3); i++) {
+        const band = bands.find(b => b.band === i + 1);
+        if (band && (band.percentile2 !== 0 || band.percentile98 !== 0)) {
+            rescales.push(`${Math.floor(band.percentile2)},${Math.ceil(band.percentile98)}`);
+        } else {
+            rescales.push('0,255');
+        }
+    }
+
+    return rescales;
 }
 
+/**
+ * Manually cache rescale (əgər başqa mənbədən gəlirsə)
+ */
+export function cacheRescale(cogUrl: string, bands: BandRescale[]): void {
+    RESCALE_CACHE.set(cogUrl, bands);
+}

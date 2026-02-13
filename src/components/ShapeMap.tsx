@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { MapContainer, TileLayer, useMap, GeoJSON } from 'react-leaflet';
+import { MapContainer, TileLayer, useMap, GeoJSON, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
-import shp from 'shpjs';
+import { parseShapefilePartial } from '../utils/shp-partial-parser';
 import { Spin } from 'antd';
 import 'leaflet/dist/leaflet.css';
 
@@ -20,75 +20,88 @@ interface ShapeMapProps {
     file: File | undefined;
     height?: string;
     maxFeatures?: number;
-    isFocus?: boolean; // focus=0 məntiqi üçün: true (default) uçur, false yerində qalır
+    isFocus?: boolean;
 }
 
+// Separate component to handle map refreshing and focusing
 const MapController = ({ data, isFocus }: { data: any, isFocus: boolean }) => {
     const map = useMap();
 
+    // This listener catches the moment the map is ready to be drawn
+    useMapEvents({
+        load: () => {
+            map.invalidateSize();
+        },
+    });
+
     useEffect(() => {
-        // Yalnız isFocus true olduqda və data gəldikdə fitBounds işləsin
+        // Force a resize calculation immediately
+        map.invalidateSize();
+
         if (isFocus && data?.features?.length > 0) {
             try {
                 const layer = L.geoJSON(data);
                 const bounds = layer.getBounds();
                 if (bounds.isValid()) {
-                    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+                    map.flyToBounds(bounds, {
+                        padding: [50, 50],
+                        maxZoom: 16,
+                        duration: 1.5
+                    });
                 }
             } catch (e) {
-                console.error("Bounds error:", e);
+                console.error("Focus error:", e);
             }
         }
-
-        // Hər bir halda ölçüləri yenilə ki, boz ekran getsin
-        const timer = setTimeout(() => map.invalidateSize(), 200);
-        return () => clearTimeout(timer);
     }, [data, map, isFocus]);
 
     return null;
 };
 
 const ShapeMap: React.FC<ShapeMapProps> = ({
-    file,
-    height = "500px",
-    maxFeatures = 3000,
-    isFocus = true // Susmaya görə true (focus=1)
-}) => {
+                                               file,
+                                               height = "500px",
+                                               maxFeatures = 1000,
+                                               isFocus = true
+                                           }) => {
     const [geoJsonData, setGeoJsonData] = useState<any>(null);
+    const [centroidData, setCentroidData] = useState<any>(null);
     const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    const [count, setCount] = useState({ total: 0, shown: 0 });
-
-    console.log(error);
-    console.log(count);
+    const [_error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         if (!file) {
             setGeoJsonData(null);
+            setCentroidData(null);
             return;
         }
 
-        const processFile = async () => {
+        const renderShapefileOnMap = async () => {
             setLoading(true);
             setError(null);
             try {
-                const buffer = await file.arrayBuffer();
-                const result = await shp(buffer);
+                const result = await parseShapefilePartial(file, maxFeatures);
+                const validFeatures = result.features.filter((f: any) => f.geometry && f.geometry.coordinates);
 
-                let allFeatures = Array.isArray(result)
-                    ? result.flatMap(r => r.features)
-                    : result.features;
+                const centroids = validFeatures.map((f: any) => {
+                    let coords: [number, number] | null = null;
+                    if (f.geometry.type === "Polygon") {
+                        const ring = f.geometry.coordinates[0];
+                        let x = 0, y = 0;
+                        ring.forEach((p: any) => { x += p[0]; y += p[1]; });
+                        coords = [x / ring.length, y / ring.length];
+                    } else if (f.geometry.type === "Point") {
+                        coords = f.geometry.coordinates;
+                    }
+                    return coords ? {
+                        type: "Feature",
+                        geometry: { type: "Point", coordinates: coords },
+                        properties: f.properties
+                    } : null;
+                }).filter(Boolean);
 
-                const validFeatures = allFeatures.filter((f: any) => {
-                    if (!f.geometry || !f.geometry.coordinates) return false;
-                    const cStr = JSON.stringify(f.geometry.coordinates);
-                    return !cStr.includes("NaN") && !cStr.includes("null");
-                });
-
-                const limitedFeatures = validFeatures.slice(0, maxFeatures);
-                setCount({ total: validFeatures.length, shown: limitedFeatures.length });
-                setGeoJsonData({ type: "FeatureCollection", features: limitedFeatures });
-
+                setGeoJsonData({ type: "FeatureCollection", features: validFeatures });
+                setCentroidData({ type: "FeatureCollection", features: centroids });
             } catch (err: any) {
                 setError("Xəta: " + err.message);
             } finally {
@@ -96,14 +109,17 @@ const ShapeMap: React.FC<ShapeMapProps> = ({
             }
         };
 
-        processFile();
+        renderShapefileOnMap();
     }, [file, maxFeatures]);
 
     const renderer = useMemo(() => L.canvas({ padding: 0.5 }), []);
 
     return (
-        <div style={{ height, width: '100%', position: 'relative', background: '#f5f5f5', borderRadius: '8px', overflow: 'hidden' }}>
-            <style>{`.leaflet-container { width: 100%; height: 100%; }`}</style>
+        <div style={{ height, width: '100%', position: 'relative', background: '#ccc' }}>
+            {/* Global CSS fix to ensure the container always fills its parent */}
+            <style>{`
+                .leaflet-container { width: 100% !important; height: 100% !important; background: #f0f0f0 !important; }
+            `}</style>
 
             {loading && (
                 <div style={{ position: 'absolute', zIndex: 1000, inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.6)' }}>
@@ -112,25 +128,36 @@ const ShapeMap: React.FC<ShapeMapProps> = ({
             )}
 
             <MapContainer
-                center={[40.4093, 49.8671]} // Əgər focus=0 olsa, xəritə bu nöqtədə qalacaq
+                center={[40.4093, 49.8671]}
                 zoom={10}
                 preferCanvas={true}
                 key={file?.name || 'empty-map'}
+                style={{ width: '100%', height: '100%' }} // Inline style for safety
             >
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
 
                 {geoJsonData && (
                     <GeoJSON
                         data={geoJsonData}
-                        pathOptions={{
-                            color: '#1890ff',
-                            weight: 2,
-                            fillOpacity: 0.3,
-                            renderer: renderer 
-                        }}
-                        style={{ color: '#1890ff', weight: 2, fillOpacity: 0.3 }}
+                        pathOptions={{ color: '#1890ff', weight: 2, fillOpacity: 0.3, renderer }}
                     />
                 )}
+
+                {centroidData && (
+                    <GeoJSON
+                        data={centroidData}
+                        pointToLayer={(_, latlng) => (
+                            L.circleMarker(latlng, {
+                                radius: 6,
+                                fillColor: "#ff4d4f",
+                                color: "#fff",
+                                weight: 1,
+                                fillOpacity: 0.9
+                            })
+                        )}
+                    />
+                )}
+
                 <MapController data={geoJsonData} isFocus={isFocus} />
             </MapContainer>
         </div>
